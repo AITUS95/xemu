@@ -30,7 +30,7 @@
 #include "renderer.h"
 
 const int num_invalid_surfaces_to_keep = 10;  // FIXME: Make automatic
-const int max_surface_frame_time_delta = 5;
+const int max_surface_frame_time_delta = 10;
 
 void pgraph_vk_set_surface_scale_factor(NV2AState *d, unsigned int scale)
 {
@@ -668,6 +668,14 @@ static bool check_surfaces_overlap(const SurfaceBinding *surface,
                                         other_surface->size);
 }
 
+static bool check_surface_fully_covered(const SurfaceBinding *new_surface,
+                                        const SurfaceBinding *old_surface)
+{
+    return (new_surface->vram_addr <= old_surface->vram_addr) &&
+           (new_surface->vram_addr + new_surface->size >=
+            old_surface->vram_addr + old_surface->size);
+}
+
 static void invalidate_overlapping_surfaces(NV2AState *d,
                                             SurfaceBinding const *surface)
 {
@@ -679,7 +687,9 @@ static void invalidate_overlapping_surfaces(NV2AState *d,
             trace_nv2a_pgraph_surface_evict_overlapping(
                 other_surface->vram_addr, other_surface->width,
                 other_surface->height, other_surface->pitch);
-            pgraph_vk_surface_download_if_dirty(d, other_surface);
+            if (!check_surface_fully_covered(surface, other_surface)) {
+                pgraph_vk_surface_download_if_dirty(d, other_surface);
+            }
             invalidate_surface(d, other_surface);
         }
     }
@@ -1515,7 +1525,9 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 trace_nv2a_pgraph_surface_evict_reason(
                     "incompatible", surface->vram_addr);
                 compare_surfaces(surface, &target);
-                pgraph_vk_surface_download_if_dirty(d, surface);
+                if (!check_surface_fully_covered(&target, surface)) {
+                    pgraph_vk_surface_download_if_dirty(d, surface);
+                }
                 invalidate_surface(d, surface);
             }
         }

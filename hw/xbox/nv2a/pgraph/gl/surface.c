@@ -355,8 +355,8 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
     // FIXME: Better checks/handling on formats and surface-texture compat
 
     if ((!surface->swizzle && surface->pitch != shape->pitch) ||
-        surface->width != shape->width ||
-        surface->height != shape->height) {
+        surface->width < shape->width ||
+        surface->height < shape->height) {
         return false;
     }
 
@@ -494,6 +494,14 @@ static bool check_surfaces_overlap(const SurfaceBinding *surface,
                                         other_surface->size);
 }
 
+static bool check_surface_fully_covered(const SurfaceBinding *new_surface,
+                                        const SurfaceBinding *old_surface)
+{
+    return (new_surface->vram_addr <= old_surface->vram_addr) &&
+           (new_surface->vram_addr + new_surface->size >=
+            old_surface->vram_addr + old_surface->size);
+}
+
 static void invalidate_overlapping_surfaces(NV2AState *d, SurfaceBinding *surface)
 {
     PGRAPHState *pg = &d->pgraph;
@@ -505,7 +513,9 @@ static void invalidate_overlapping_surfaces(NV2AState *d, SurfaceBinding *surfac
             trace_nv2a_pgraph_surface_evict_overlapping(
                 other_surface->vram_addr, other_surface->width, other_surface->height,
                 other_surface->pitch);
-            pgraph_gl_surface_download_if_dirty(d, other_surface);
+            if (!check_surface_fully_covered(surface, other_surface)) {
+                pgraph_gl_surface_download_if_dirty(d, other_surface);
+            }
             pgraph_gl_surface_invalidate(d, other_surface);
         }
     }
@@ -592,7 +602,7 @@ static void surface_evict_old(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    const int surface_age_limit = 5;
+    const int surface_age_limit = 10;
 
     SurfaceBinding *s, *next;
     QTAILQ_FOREACH_SAFE(s, &r->surfaces, entry, next) {
@@ -1207,7 +1217,9 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
                 trace_nv2a_pgraph_surface_evict_reason(
                     "incompatible", found->vram_addr);
                 compare_surfaces(found, &entry);
-                pgraph_gl_surface_download_if_dirty(d, found);
+                if (!check_surface_fully_covered(&entry, found)) {
+                    pgraph_gl_surface_download_if_dirty(d, found);
+                }
                 pgraph_gl_surface_invalidate(d, found);
             }
         }

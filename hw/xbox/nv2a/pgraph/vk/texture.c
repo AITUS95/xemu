@@ -621,8 +621,9 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
     VkCommandBuffer cmd = pgraph_vk_begin_nondraw_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
 
-    unsigned int scaled_width = surface->width,
-                 scaled_height = surface->height;
+    /* Use texture dimensions for copy; surface may be larger */
+    unsigned int scaled_width = state->width,
+                 scaled_height = state->height;
     pgraph_apply_scaling_factor(pg, &scaled_width, &scaled_height);
 
     size_t copied_image_size =
@@ -837,13 +838,14 @@ static void copy_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     texture->current_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
+    /* Use texture dimensions for copy extent; surface may be larger */
     VkImageCopy region = {
         .srcSubresource.aspectMask = surface->host_fmt.aspect,
         .srcSubresource.layerCount = 1,
         .dstSubresource.aspectMask = surface->host_fmt.aspect,
         .dstSubresource.layerCount = 1,
-        .extent.width = surface->width,
-        .extent.height = surface->height,
+        .extent.width = state->width,
+        .extent.height = state->height,
         .extent.depth = 1,
     };
     pgraph_apply_scaling_factor(pg, &region.extent.width,
@@ -890,8 +892,8 @@ static bool check_surface_to_texture_compatiblity(const SurfaceBinding *surface,
                                                   const TextureShape *shape)
 {
     if ((!surface->swizzle && surface->pitch != shape->pitch) ||
-        surface->width != shape->width ||
-        surface->height != shape->height ||
+        surface->width < shape->width ||
+        surface->height < shape->height ||
         shape->cubemap ||
         shape->levels > 1) {
         return false;
