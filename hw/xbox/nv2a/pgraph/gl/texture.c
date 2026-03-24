@@ -799,7 +799,7 @@ void pgraph_gl_init_textures(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    const size_t texture_cache_size = 512;
+    const size_t texture_cache_size = 1024;
     lru_init(&r->texture_cache);
     r->texture_cache_entries = malloc(texture_cache_size * sizeof(TextureLruNode));
     assert(r->texture_cache_entries != NULL);
