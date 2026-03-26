@@ -694,7 +694,8 @@ void pgraph_gl_shader_cache_to_disk(ShaderBinding *binding)
 }
 
 static void apply_uniform_updates(const UniformInfo *info, int *locs,
-                                  void *values, size_t count)
+                                  void *values, void *prev_values,
+                                  bool force, size_t count)
 {
     for (int i = 0; i < count; i++) {
         if (locs[i] == -1) {
@@ -702,6 +703,14 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
         }
 
         void *value = (char*)values + info[i].val_offs;
+
+        if (!force && prev_values) {
+            void *prev = (char*)prev_values + info[i].val_offs;
+            size_t byte_size = info[i].size * info[i].count;
+            if (memcmp(value, prev, byte_size) == 0) {
+                continue;
+            }
+        }
 
         switch (info[i].type) {
         case UniformElementType_uint:
@@ -739,19 +748,22 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
     assert(glGetError() == GL_NO_ERROR);
 }
 
-// FIXME: Dirty tracking
-// FIXME: Consider UBO to align with VK renderer
-static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding)
+static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding,
+                                   bool binding_changed)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
+    bool force = binding_changed || !r->uniform_cache_valid;
 
     VshUniformValues vsh_values;
+    memset(&vsh_values, 0, sizeof(vsh_values));
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
                                   binding->uniform_locs.vsh, &vsh_values);
     apply_uniform_updates(VshUniformInfo, binding->uniform_locs.vsh,
-                          &vsh_values, VshUniform__COUNT);
+                          &vsh_values, &r->prev_vsh_values,
+                          force, VshUniform__COUNT);
 
     PshUniformValues psh_values;
+    memset(&psh_values, 0, sizeof(psh_values));
     pgraph_glsl_set_psh_uniform_values(pg, binding->uniform_locs.psh, &psh_values);
 
     for (int i = 0; i < 4; i++) {
@@ -761,7 +773,12 @@ static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding)
         }
     }
     apply_uniform_updates(PshUniformInfo, binding->uniform_locs.psh,
-                          &psh_values, PshUniform__COUNT);
+                          &psh_values, &r->prev_psh_values,
+                          force, PshUniform__COUNT);
+
+    memcpy(&r->prev_vsh_values, &vsh_values, sizeof(vsh_values));
+    memcpy(&r->prev_psh_values, &psh_values, sizeof(psh_values));
+    r->uniform_cache_valid = true;
 }
 
 void pgraph_gl_bind_shaders(PGRAPHState *pg)
@@ -813,7 +830,7 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
 update_uniforms:
     assert(r->shader_binding);
     assert(r->shader_binding->initialized);
-    update_shader_uniforms(pg, r->shader_binding);
+    update_shader_uniforms(pg, r->shader_binding, binding_changed);
 }
 
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src)

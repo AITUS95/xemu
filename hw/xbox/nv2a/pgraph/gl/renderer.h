@@ -238,6 +238,10 @@ typedef struct PGRAPHGLState {
     struct supported_extensions {
         GLboolean texture_filter_anisotropic;
     } supported_extensions;
+
+    VshUniformValues prev_vsh_values;
+    PshUniformValues prev_psh_values;
+    bool uniform_cache_valid;
 } PGRAPHGLState;
 
 extern GloContext *g_nv2a_context_render;
