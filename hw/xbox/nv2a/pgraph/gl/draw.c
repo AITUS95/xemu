@@ -159,6 +159,7 @@ void pgraph_gl_draw_begin(NV2AState *d)
 
     pgraph_gl_bind_textures(d);
     pgraph_gl_bind_shaders(pg);
+    pgraph_clear_dirty_reg_map(pg);
 
     glColorMask(mask_red, mask_green, mask_blue, mask_alpha);
     glDepthMask(!!(control_0 & NV_PGRAPH_CONTROL_0_ZWRITEENABLE));
