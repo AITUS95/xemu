@@ -1373,6 +1373,11 @@ int main(int argc, char **argv)
     }
     qemu_sem_post(&display_shutdown_sem);
     qemu_thread_join(&thread);
+#ifdef __linux__
+    // Save settings before display cleanup on Linux to avoid losing config
+    // when NVIDIA EGL driver crashes during atexit handler teardown.
+    xemu_settings_save();
+#endif
     display_finalize();
     return exit_status;
 }
