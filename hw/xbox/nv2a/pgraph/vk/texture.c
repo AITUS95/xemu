@@ -31,6 +31,8 @@
 #include "renderer.h"
 
 static void texture_cache_release_node_resources(PGRAPHVkState *r, TextureBinding *snode);
+static void sampler_cache_release_node_resources(PGRAPHVkState *r,
+                                                 TextureSamplerBinding *snode);
 
 static const VkImageType dimensionality_to_vk_image_type[] = {
     0,
@@ -1032,6 +1034,8 @@ static void create_dummy_texture(PGRAPHState *pg)
         .current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         .allocation = texture_allocation,
         .image_view = texture_image_view,
+    };
+    r->dummy_sampler = (TextureSamplerBinding){
         .sampler = texture_sampler,
     };
 }
@@ -1039,6 +1043,7 @@ static void create_dummy_texture(PGRAPHState *pg)
 static void destroy_dummy_texture(PGRAPHVkState *r)
 {
     texture_cache_release_node_resources(r, &r->dummy_texture);
+    sampler_cache_release_node_resources(r, &r->dummy_sampler);
 }
 
 static void set_texture_label(PGRAPHState *pg, TextureBinding *texture)
@@ -1069,6 +1074,154 @@ static bool is_linear_filter_supported_for_format(PGRAPHVkState *r,
 {
     return r->texture_format_properties[kelvin_format].optimalTilingFeatures &
            VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+}
+
+static VkSampler create_texture_sampler(PGRAPHState *pg,
+                                        const TextureSamplerKey *key)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    const TextureShape *state = &key->state;
+    BasicColorFormatInfo f_basic =
+        kelvin_color_format_info_map[state->color_format];
+    VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
+    uint32_t filter = key->filter;
+    uint32_t address = key->address;
+    uint32_t border_color_pack32 = key->border_color;
+    uint32_t max_anisotropy = key->max_anisotropy;
+    void *sampler_next_struct = NULL;
+
+    VkSamplerCustomBorderColorCreateInfoEXT custom_border_color_create_info;
+    VkBorderColor vk_border_color;
+
+    bool is_integer_type = vkf.vk_format == VK_FORMAT_R32_UINT;
+
+    if (r->custom_border_color_extension_enabled) {
+        vk_border_color = is_integer_type ? VK_BORDER_COLOR_INT_CUSTOM_EXT :
+                                            VK_BORDER_COLOR_FLOAT_CUSTOM_EXT;
+        custom_border_color_create_info =
+            (VkSamplerCustomBorderColorCreateInfoEXT){
+                .sType =
+                    VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT,
+                .format = vkf.vk_format,
+                .pNext = sampler_next_struct
+            };
+        if (is_integer_type) {
+            float rgba[4];
+            pgraph_argb_pack32_to_rgba_float(border_color_pack32, rgba);
+            for (int i = 0; i < 4; i++) {
+                custom_border_color_create_info.customBorderColor.uint32[i] =
+                    (uint32_t)((double)rgba[i] * (double)0xffffffff);
+            }
+        } else {
+            pgraph_argb_pack32_to_rgba_float(
+                border_color_pack32,
+                custom_border_color_create_info.customBorderColor.float32);
+        }
+        sampler_next_struct = &custom_border_color_create_info;
+    } else {
+        // FIXME: Handle custom color in shader
+        if (is_integer_type) {
+            vk_border_color = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+        } else if (border_color_pack32 == 0x00000000) {
+            vk_border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+        } else if (border_color_pack32 == 0xff000000) {
+            vk_border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        } else {
+            vk_border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+        }
+    }
+
+    if (filter & NV_PGRAPH_TEXFILTER0_ASIGNED)
+        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_ASIGNED");
+    if (filter & NV_PGRAPH_TEXFILTER0_RSIGNED)
+        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_RSIGNED");
+    if (filter & NV_PGRAPH_TEXFILTER0_GSIGNED)
+        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_GSIGNED");
+    if (filter & NV_PGRAPH_TEXFILTER0_BSIGNED)
+        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_BSIGNED");
+
+    VkFilter vk_min_filter, vk_mag_filter;
+    unsigned int mag_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MAG);
+    assert(mag_filter < ARRAY_SIZE(pgraph_texture_mag_filter_vk_map));
+
+    unsigned int min_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN);
+    assert(min_filter < ARRAY_SIZE(pgraph_texture_min_filter_vk_map));
+
+    if (is_linear_filter_supported_for_format(r, state->color_format)) {
+        vk_mag_filter = pgraph_texture_min_filter_vk_map[mag_filter];
+        vk_min_filter = pgraph_texture_min_filter_vk_map[min_filter];
+    } else {
+        vk_mag_filter = vk_min_filter = VK_FILTER_NEAREST;
+    }
+
+    bool mipmap_en =
+        !f_basic.linear &&
+        !(min_filter == NV_PGRAPH_TEXFILTER0_MIN_BOX_LOD0 ||
+          min_filter == NV_PGRAPH_TEXFILTER0_MIN_TENT_LOD0 ||
+          min_filter == NV_PGRAPH_TEXFILTER0_MIN_CONVOLUTION_2D_LOD0);
+    uint32_t mip_levels = f_basic.linear ? 1 : state->levels;
+    bool mipmap_nearest =
+        f_basic.linear || mip_levels == 1 ||
+        min_filter == NV_PGRAPH_TEXFILTER0_MIN_BOX_NEARESTLOD ||
+        min_filter == NV_PGRAPH_TEXFILTER0_MIN_TENT_NEARESTLOD;
+
+    float lod_bias = pgraph_convert_lod_bias_to_float(
+        GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIPMAP_LOD_BIAS));
+    if (lod_bias > r->device_props.limits.maxSamplerLodBias) {
+        lod_bias = r->device_props.limits.maxSamplerLodBias;
+    } else if (lod_bias < -r->device_props.limits.maxSamplerLodBias) {
+        lod_bias = -r->device_props.limits.maxSamplerLodBias;
+    }
+    uint32_t sampler_max_anisotropy =
+        MIN(r->device_props.limits.maxSamplerAnisotropy, max_anisotropy);
+
+    VkSamplerCreateInfo sampler_create_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = vk_mag_filter,
+        .minFilter = vk_min_filter,
+        .addressModeU = lookup_texture_address_mode(
+            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRU)),
+        .addressModeV = lookup_texture_address_mode(
+            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRV)),
+        .addressModeW = (state->dimensionality > 2) ? lookup_texture_address_mode(
+            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRP)) : 0,
+        .anisotropyEnable =
+            r->enabled_physical_device_features.samplerAnisotropy &&
+            sampler_max_anisotropy > 1,
+        .maxAnisotropy = sampler_max_anisotropy,
+        .borderColor = vk_border_color,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_ALWAYS,
+        .mipmapMode = mipmap_nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST :
+                                       VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .minLod = mipmap_en ? MIN(state->min_mipmap_level, state->levels - 1) : 0.0,
+        .maxLod = mipmap_en ? MIN(state->max_mipmap_level, state->levels - 1) : 0.0,
+        .mipLodBias = lod_bias,
+        .pNext = sampler_next_struct,
+    };
+
+    VkSampler sampler;
+    VK_CHECK(vkCreateSampler(r->device, &sampler_create_info, NULL, &sampler));
+    return sampler;
+}
+
+static TextureSamplerBinding *bind_texture_sampler(PGRAPHState *pg,
+                                                   int texture_idx,
+                                                   const TextureSamplerKey *key)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    uint64_t sampler_hash = fast_hash((void *)key, sizeof(*key));
+    LruNode *node = lru_lookup(&r->texture_sampler_cache, sampler_hash, key);
+    TextureSamplerBinding *snode =
+        container_of(node, TextureSamplerBinding, node);
+
+    if (snode->sampler == VK_NULL_HANDLE) {
+        memcpy(&snode->key, key, sizeof(*key));
+        snode->sampler = create_texture_sampler(pg, key);
+    }
+
+    r->texture_samplers[texture_idx] = snode;
+    return snode;
 }
 
 static void create_texture(PGRAPHState *pg, int texture_idx)
@@ -1111,11 +1264,13 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     }
     key.scale = 1;
 
-    // FIXME: Separate sampler from texture
-    key.filter = filter;
-    key.address = address;
-    key.border_color = border_color_pack32;
-    key.max_anisotropy = max_anisotropy;
+    TextureSamplerKey sampler_key;
+    memset(&sampler_key, 0, sizeof(sampler_key));
+    sampler_key.state = state;
+    sampler_key.filter = filter;
+    sampler_key.address = address;
+    sampler_key.border_color = border_color_pack32;
+    sampler_key.max_anisotropy = max_anisotropy;
 
     bool possibly_dirty = false;
     bool possibly_dirty_checked = false;
@@ -1149,6 +1304,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     if (surface_to_texture && pg->surface_scale_factor > 1) {
         key.scale = pg->surface_scale_factor;
     }
+    bind_texture_sampler(pg, texture_idx, &sampler_key);
 
     uint64_t key_hash = fast_hash((void*)&key, sizeof(key));
     LruNode *node = lru_lookup(&r->texture_cache, key_hash, &key);
@@ -1193,6 +1349,10 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                 snode->hash = content_hash;
             }
         }
+        /* The dirty hint is sticky across texture bindings. Once the backing
+         * pages have been checked and the cached image is updated or confirmed
+         * current, clear it so later binds do not hash the same texture again. */
+        snode->possibly_dirty = false;
 
         NV2A_VK_DGROUP_END();
         return;
@@ -1261,121 +1421,6 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                                &snode->image_view));
 
 
-    void *sampler_next_struct = NULL;
-
-    VkSamplerCustomBorderColorCreateInfoEXT custom_border_color_create_info;
-    VkBorderColor vk_border_color;
-
-    bool is_integer_type = vkf.vk_format == VK_FORMAT_R32_UINT;
-
-    if (r->custom_border_color_extension_enabled) {
-        vk_border_color = is_integer_type ? VK_BORDER_COLOR_INT_CUSTOM_EXT :
-                                            VK_BORDER_COLOR_FLOAT_CUSTOM_EXT;
-        custom_border_color_create_info =
-            (VkSamplerCustomBorderColorCreateInfoEXT){
-                .sType =
-                    VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT,
-                .format = image_view_create_info.format,
-                .pNext = sampler_next_struct
-            };
-        if (is_integer_type) {
-            float rgba[4];
-            pgraph_argb_pack32_to_rgba_float(border_color_pack32, rgba);
-            for (int i = 0; i < 4; i++) {
-                custom_border_color_create_info.customBorderColor.uint32[i] =
-                    (uint32_t)((double)rgba[i] * (double)0xffffffff);
-            }
-        } else {
-            pgraph_argb_pack32_to_rgba_float(
-                border_color_pack32,
-                custom_border_color_create_info.customBorderColor.float32);
-        }
-        sampler_next_struct = &custom_border_color_create_info;
-    } else {
-        // FIXME: Handle custom color in shader
-        if (is_integer_type) {
-            vk_border_color = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
-        } else if (border_color_pack32 == 0x00000000) {
-            vk_border_color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
-        } else if (border_color_pack32 == 0xff000000) {
-            vk_border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
-        } else {
-            vk_border_color = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-        }
-    }
-
-    if (filter & NV_PGRAPH_TEXFILTER0_ASIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_ASIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_RSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_RSIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_GSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_GSIGNED");
-    if (filter & NV_PGRAPH_TEXFILTER0_BSIGNED)
-        NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_BSIGNED");
-
-    VkFilter vk_min_filter, vk_mag_filter;
-    unsigned int mag_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MAG);
-    assert(mag_filter < ARRAY_SIZE(pgraph_texture_mag_filter_vk_map));
-
-    unsigned int min_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN);
-    assert(min_filter < ARRAY_SIZE(pgraph_texture_min_filter_vk_map));
-
-    if (is_linear_filter_supported_for_format(r, state.color_format)) {
-        vk_mag_filter = pgraph_texture_min_filter_vk_map[mag_filter];
-        vk_min_filter = pgraph_texture_min_filter_vk_map[min_filter];
-    } else {
-        vk_mag_filter = vk_min_filter = VK_FILTER_NEAREST;
-    }
-
-    bool mipmap_en =
-        !f_basic.linear &&
-        !(min_filter == NV_PGRAPH_TEXFILTER0_MIN_BOX_LOD0 ||
-          min_filter == NV_PGRAPH_TEXFILTER0_MIN_TENT_LOD0 ||
-          min_filter == NV_PGRAPH_TEXFILTER0_MIN_CONVOLUTION_2D_LOD0);
-
-    bool mipmap_nearest =
-        f_basic.linear || image_create_info.mipLevels == 1 ||
-        min_filter == NV_PGRAPH_TEXFILTER0_MIN_BOX_NEARESTLOD ||
-        min_filter == NV_PGRAPH_TEXFILTER0_MIN_TENT_NEARESTLOD;
-
-    float lod_bias = pgraph_convert_lod_bias_to_float(
-        GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIPMAP_LOD_BIAS));
-    if (lod_bias > r->device_props.limits.maxSamplerLodBias) {
-        lod_bias = r->device_props.limits.maxSamplerLodBias;
-    } else if (lod_bias < -r->device_props.limits.maxSamplerLodBias) {
-        lod_bias = -r->device_props.limits.maxSamplerLodBias;
-    }
-    uint32_t sampler_max_anisotropy =
-        MIN(r->device_props.limits.maxSamplerAnisotropy, max_anisotropy);
-
-    VkSamplerCreateInfo sampler_create_info = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .magFilter = vk_mag_filter,
-        .minFilter = vk_min_filter,
-        .addressModeU = lookup_texture_address_mode(
-            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRU)),
-        .addressModeV = lookup_texture_address_mode(
-            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRV)),
-        .addressModeW = (state.dimensionality > 2) ? lookup_texture_address_mode(
-            GET_MASK(address, NV_PGRAPH_TEXADDRESS0_ADDRP)) : 0,
-        .anisotropyEnable =
-            r->enabled_physical_device_features.samplerAnisotropy &&
-            sampler_max_anisotropy > 1,
-        .maxAnisotropy = sampler_max_anisotropy,
-        .borderColor = vk_border_color,
-        .compareEnable = VK_FALSE,
-        .compareOp = VK_COMPARE_OP_ALWAYS,
-        .mipmapMode = mipmap_nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST :
-                                       VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        .minLod = mipmap_en ? MIN(state.min_mipmap_level, state.levels - 1) : 0.0,
-        .maxLod = mipmap_en ? MIN(state.max_mipmap_level, state.levels - 1) : 0.0,
-        .mipLodBias = lod_bias,
-        .pNext = sampler_next_struct,
-    };
-
-    VK_CHECK(vkCreateSampler(r->device, &sampler_create_info, NULL,
-                             &snode->sampler));
-
     set_texture_label(pg, snode);
 
     r->texture_bindings[texture_idx] = snode;
@@ -1395,7 +1440,16 @@ static bool check_textures_dirty(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        if (!r->texture_bindings[i] || pg->texture_dirty[i]) {
+        /* Sampler register changes require descriptor updates even when the
+         * texture image data and image cache key did not change. */
+        bool sampler_dirty =
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_TEXADDRESS0 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_BORDERCOLOR0 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_TEXFILTER0 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_TEXCTL0_0 + i * 4);
+
+        if (!r->texture_bindings[i] || !r->texture_samplers[i] ||
+            pg->texture_dirty[i] || sampler_dirty) {
             return true;
         }
     }
@@ -1407,6 +1461,9 @@ static void update_timestamps(PGRAPHVkState *r)
     for (int i = 0; i < ARRAY_SIZE(r->texture_bindings); i++) {
         if (r->texture_bindings[i]) {
             r->texture_bindings[i]->submit_time = r->submit_count;
+        }
+        if (r->texture_samplers[i]) {
+            r->texture_samplers[i]->submit_time = r->submit_count;
         }
     }
 }
@@ -1433,6 +1490,7 @@ void pgraph_vk_bind_textures(NV2AState *d)
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         if (!pgraph_is_texture_enabled(pg, i)) {
             r->texture_bindings[i] = &r->dummy_texture;
+            r->texture_samplers[i] = &r->dummy_sampler;
             continue;
         }
 
@@ -1453,14 +1511,10 @@ static void texture_cache_entry_init(Lru *lru, LruNode *node, const void *state)
     snode->image = VK_NULL_HANDLE;
     snode->allocation = VK_NULL_HANDLE;
     snode->image_view = VK_NULL_HANDLE;
-    snode->sampler = VK_NULL_HANDLE;
 }
 
 static void texture_cache_release_node_resources(PGRAPHVkState *r, TextureBinding *snode)
 {
-    vkDestroySampler(r->device, snode->sampler, NULL);
-    snode->sampler = VK_NULL_HANDLE;
-
     vkDestroyImageView(r->device, snode->image_view, NULL);
     snode->image_view = VK_NULL_HANDLE;
 
@@ -1528,6 +1582,86 @@ static void texture_cache_finalize(PGRAPHVkState *r)
     r->texture_cache_entries = NULL;
 }
 
+static void sampler_cache_entry_init(Lru *lru, LruNode *node, const void *state)
+{
+    TextureSamplerBinding *snode =
+        container_of(node, TextureSamplerBinding, node);
+
+    snode->sampler = VK_NULL_HANDLE;
+    snode->submit_time = 0;
+}
+
+static void sampler_cache_release_node_resources(PGRAPHVkState *r,
+                                                 TextureSamplerBinding *snode)
+{
+    vkDestroySampler(r->device, snode->sampler, NULL);
+    snode->sampler = VK_NULL_HANDLE;
+}
+
+static bool sampler_cache_entry_pre_evict(Lru *lru, LruNode *node)
+{
+    PGRAPHVkState *r = container_of(lru, PGRAPHVkState, texture_sampler_cache);
+    TextureSamplerBinding *snode =
+        container_of(node, TextureSamplerBinding, node);
+
+    for (int i = 0; i < ARRAY_SIZE(r->texture_samplers); i++) {
+        if (r->texture_samplers[i] == snode) {
+            return false;
+        }
+    }
+
+    /* The descriptor set can still reference the sampler until the current
+     * command buffer is submitted, so mirror the image-cache lifetime check. */
+    if (r->in_command_buffer && snode->submit_time == r->submit_count) {
+        return false;
+    }
+
+    return true;
+}
+
+static void sampler_cache_entry_post_evict(Lru *lru, LruNode *node)
+{
+    PGRAPHVkState *r = container_of(lru, PGRAPHVkState, texture_sampler_cache);
+    TextureSamplerBinding *snode =
+        container_of(node, TextureSamplerBinding, node);
+
+    sampler_cache_release_node_resources(r, snode);
+}
+
+static bool sampler_cache_entry_compare(Lru *lru, LruNode *node,
+                                        const void *key)
+{
+    TextureSamplerBinding *snode =
+        container_of(node, TextureSamplerBinding, node);
+
+    return memcmp(&snode->key, key, sizeof(TextureSamplerKey));
+}
+
+static void sampler_cache_init(PGRAPHVkState *r)
+{
+    const size_t sampler_cache_size = 1024;
+
+    lru_init(&r->texture_sampler_cache);
+    r->texture_sampler_cache_entries =
+        g_malloc_n(sampler_cache_size, sizeof(TextureSamplerBinding));
+    assert(r->texture_sampler_cache_entries != NULL);
+    for (int i = 0; i < sampler_cache_size; i++) {
+        lru_add_free(&r->texture_sampler_cache,
+                     &r->texture_sampler_cache_entries[i].node);
+    }
+    r->texture_sampler_cache.init_node = sampler_cache_entry_init;
+    r->texture_sampler_cache.compare_nodes = sampler_cache_entry_compare;
+    r->texture_sampler_cache.pre_node_evict = sampler_cache_entry_pre_evict;
+    r->texture_sampler_cache.post_node_evict = sampler_cache_entry_post_evict;
+}
+
+static void sampler_cache_finalize(PGRAPHVkState *r)
+{
+    lru_flush(&r->texture_sampler_cache);
+    g_free(r->texture_sampler_cache_entries);
+    r->texture_sampler_cache_entries = NULL;
+}
+
 void pgraph_vk_trim_texture_cache(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -1542,6 +1676,16 @@ void pgraph_vk_trim_texture_cache(PGRAPHState *pg)
     }
 
     NV2A_VK_DPRINTF("Evicted %d textures, %d remain", num_evicted, r->texture_cache.num_used);
+
+    num_to_evict = r->texture_sampler_cache.num_used / 4;
+    num_evicted = 0;
+
+    while (num_to_evict-- && lru_try_evict_one(&r->texture_sampler_cache)) {
+        num_evicted += 1;
+    }
+
+    NV2A_VK_DPRINTF("Evicted %d texture samplers, %d remain", num_evicted,
+                    r->texture_sampler_cache.num_used);
 }
 
 void pgraph_vk_init_textures(PGRAPHState *pg)
@@ -1549,6 +1693,7 @@ void pgraph_vk_init_textures(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     texture_cache_init(r);
+    sampler_cache_init(r);
     create_dummy_texture(pg);
 
     r->texture_format_properties = g_malloc0_n(
@@ -1568,12 +1713,15 @@ void pgraph_vk_finalize_textures(PGRAPHState *pg)
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         r->texture_bindings[i] = NULL;
+        r->texture_samplers[i] = NULL;
     }
 
     destroy_dummy_texture(r);
     texture_cache_finalize(r);
+    sampler_cache_finalize(r);
 
     assert(r->texture_cache.num_used == 0);
+    assert(r->texture_sampler_cache.num_used == 0);
 
     g_free(r->texture_format_properties);
     r->texture_format_properties = NULL;

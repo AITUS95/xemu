@@ -210,7 +210,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         image_infos[i] = (VkDescriptorImageInfo){
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .imageView = r->texture_bindings[i]->image_view,
-            .sampler = r->texture_bindings[i]->sampler,
+            .sampler = r->texture_samplers[i]->sampler,
         };
         descriptor_writes[2 + i] = (VkWriteDescriptorSet){
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,

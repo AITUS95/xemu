@@ -203,10 +203,6 @@ typedef struct TextureKey {
     hwaddr palette_vram_offset;
     hwaddr palette_length;
     float scale;
-    uint32_t filter;
-    uint32_t address;
-    uint32_t border_color;
-    uint32_t max_anisotropy;
 } TextureKey;
 
 typedef struct TextureBinding {
@@ -216,12 +212,28 @@ typedef struct TextureBinding {
     VkImageLayout current_layout;
     VkImageView image_view;
     VmaAllocation allocation;
-    VkSampler sampler;
     bool possibly_dirty;
     uint64_t hash;
     unsigned int draw_time;
     uint32_t submit_time;
 } TextureBinding;
+
+typedef struct TextureSamplerKey {
+    /* Keep sampler state out of TextureKey so sampler changes do not
+     * invalidate cached texture images or force content re-hashing. */
+    TextureShape state;
+    uint32_t filter;
+    uint32_t address;
+    uint32_t border_color;
+    uint32_t max_anisotropy;
+} TextureSamplerKey;
+
+typedef struct TextureSamplerBinding {
+    LruNode node;
+    TextureSamplerKey key;
+    VkSampler sampler;
+    uint32_t submit_time;
+} TextureSamplerBinding;
 
 typedef struct QueryReport {
     QSIMPLEQ_ENTRY(QueryReport) entry;
@@ -396,6 +408,10 @@ typedef struct PGRAPHVkState {
     TextureBinding *texture_cache_entries;
     TextureBinding *texture_bindings[NV2A_MAX_TEXTURES];
     TextureBinding dummy_texture;
+    Lru texture_sampler_cache;
+    TextureSamplerBinding *texture_sampler_cache_entries;
+    TextureSamplerBinding *texture_samplers[NV2A_MAX_TEXTURES];
+    TextureSamplerBinding dummy_sampler;
     bool texture_bindings_changed;
     VkFormatProperties *texture_format_properties;
 
