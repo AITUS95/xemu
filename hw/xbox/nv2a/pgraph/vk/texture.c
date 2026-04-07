@@ -1488,18 +1488,31 @@ void pgraph_vk_bind_textures(NV2AState *d)
     }
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        TextureBinding *old_texture = r->texture_bindings[i];
+        TextureSamplerBinding *old_sampler = r->texture_samplers[i];
+
         if (!pgraph_is_texture_enabled(pg, i)) {
             r->texture_bindings[i] = &r->dummy_texture;
             r->texture_samplers[i] = &r->dummy_sampler;
+            r->texture_bindings_changed |=
+                old_texture != r->texture_bindings[i] ||
+                old_sampler != r->texture_samplers[i];
             continue;
         }
 
         create_texture(pg, i);
 
+        /*
+         * Texture data can be rechecked or reuploaded without changing the
+         * descriptor contents. Only report a binding change when the image view
+         * or sampler object actually changed.
+         */
+        r->texture_bindings_changed |=
+            old_texture != r->texture_bindings[i] ||
+            old_sampler != r->texture_samplers[i];
+
         pg->texture_dirty[i] = false; // FIXME: Move to renderer?
     }
-
-    r->texture_bindings_changed = true;
     update_timestamps(r);
     NV2A_VK_DGROUP_END();
 }

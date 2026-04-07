@@ -36,7 +36,7 @@ static void create_descriptor_pool(PGRAPHState *pg)
 
     VkDescriptorPoolSize pool_sizes[] = {
         {
-            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             .descriptorCount = 2 * num_sets,
         },
         {
@@ -73,13 +73,13 @@ static void create_descriptor_set_layout(PGRAPHState *pg)
     bindings[0] = (VkDescriptorSetLayoutBinding){
         .binding = VSH_UBO_BINDING,
         .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
     };
     bindings[1] = (VkDescriptorSetLayoutBinding){
         .binding = PSH_UBO_BINDING,
         .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
     };
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
@@ -137,16 +137,143 @@ static void destroy_descriptor_sets(PGRAPHState *pg)
     }
 }
 
+static bool any_reg_dirty(PGRAPHState *pg, const unsigned int *regs,
+                          size_t count)
+{
+    for (int i = 0; i < count; i++) {
+        if (pgraph_is_reg_dirty(pg, regs[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool reg_range_dirty(PGRAPHState *pg, unsigned int first_reg,
+                            size_t count)
+{
+    for (int i = 0; i < count; i++) {
+        if (pgraph_is_reg_dirty(pg, first_reg + i * 4)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool psh_bump_regs_dirty(PGRAPHState *pg)
+{
+    for (int i = 0; i < 3; i++) {
+        if (pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT00 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT01 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT10 + i * 4) ||
+            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT11 + i * 4)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static float get_texture_uniform_scale(PGRAPHVkState *r, int texture_idx)
+{
+    TextureBinding *binding = r->texture_bindings[texture_idx];
+
+    if (!binding) {
+        return 1.0f;
+    }
+
+    float scale = binding->key.scale;
+    BasicColorFormatInfo f_basic =
+        kelvin_color_format_info_map[binding->key.state.color_format];
+
+    return f_basic.linear ? scale : 1.0f;
+}
+
+static bool shader_uniforms_dirty(PGRAPHState *pg, ShaderBinding *binding)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    if (!r->uniform_buffer_offsets_valid || r->shader_bindings_changed ||
+        r->framebuffer_dirty ||
+        (r->uniform_dirty_generation != pg->uniform_dirty_generation)) {
+        return true;
+    }
+
+    if (r->texture_bindings_changed) {
+        /*
+         * Texture descriptor changes only affect the UBO through texScale. Avoid
+         * rebuilding uniform data when the image/sampler changed but the scale
+         * visible to the shader stayed the same.
+         */
+        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+            if (r->uniform_texture_scales[i] !=
+                get_texture_uniform_scale(r, i)) {
+                return true;
+            }
+        }
+    }
+
+    const unsigned int common_regs[] = {
+        NV_PGRAPH_ZCLIPMIN,
+        NV_PGRAPH_ZCLIPMAX,
+    };
+    if (any_reg_dirty(pg, common_regs, ARRAY_SIZE(common_regs))) {
+        return true;
+    }
+
+    if (binding->vsh.uniform_locs[VshUniform_inlineValue] != -1 &&
+        !r->use_push_constants_for_uniform_attrs) {
+        /*
+         * Inline vertex attribute values are not tracked with register dirty
+         * bits. On current hardware this path usually uses push constants, but
+         * keep the UBO fallback conservative.
+         */
+        return true;
+    }
+
+    const unsigned int vsh_regs[] = {
+        NV_PGRAPH_FOGPARAM0,
+        NV_PGRAPH_FOGPARAM1,
+    };
+    if (any_reg_dirty(pg, vsh_regs, ARRAY_SIZE(vsh_regs))) {
+        return true;
+    }
+
+    const unsigned int psh_regs[] = {
+        NV_PGRAPH_CONTROL_0,       NV_PGRAPH_FOGCOLOR,
+        NV_PGRAPH_SETUPRASTER,     NV_PGRAPH_ZOFFSETBIAS,
+        NV_PGRAPH_ZOFFSETFACTOR,
+    };
+    if (any_reg_dirty(pg, psh_regs, ARRAY_SIZE(psh_regs)) ||
+        reg_range_dirty(pg, NV_PGRAPH_SPECFOGFACTOR0, 2) ||
+        reg_range_dirty(pg, NV_PGRAPH_COLORKEYCOLOR0, 4) ||
+        reg_range_dirty(pg, NV_PGRAPH_COMBINEFACTOR0, 8) ||
+        reg_range_dirty(pg, NV_PGRAPH_COMBINEFACTOR1, 8) ||
+        reg_range_dirty(pg, NV_PGRAPH_TEXFMT0, NV2A_MAX_TEXTURES) ||
+        reg_range_dirty(pg, NV_PGRAPH_BUMPSCALE1, 3) ||
+        reg_range_dirty(pg, NV_PGRAPH_BUMPOFFSET1, 3) ||
+        reg_range_dirty(pg, NV_PGRAPH_WINDOWCLIPX0, 8) ||
+        reg_range_dirty(pg, NV_PGRAPH_WINDOWCLIPY0, 8) ||
+        psh_bump_regs_dirty(pg)) {
+        return true;
+    }
+
+    return false;
+}
+
 void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     bool need_uniform_write =
         r->uniforms_changed ||
-        !r->storage_buffers[BUFFER_UNIFORM_STAGING].buffer_offset;
+        !r->uniform_buffer_offsets_valid;
+    bool need_descriptor_write =
+        r->shader_bindings_changed || r->texture_bindings_changed ||
+        (r->descriptor_set_index == 0);
 
-    if (!(r->shader_bindings_changed || r->texture_bindings_changed ||
-          (r->descriptor_set_index == 0) || need_uniform_write)) {
+    if (!(need_descriptor_write || need_uniform_write)) {
         return; // Nothing changed
     }
 
@@ -164,16 +291,14 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
                                         r->device_props.limits.minUniformBufferOffsetAlignment);
 
     bool need_descriptor_write_reset =
+        need_descriptor_write &&
         (r->descriptor_set_index >= ARRAY_SIZE(r->descriptor_sets));
 
     if (need_descriptor_write_reset || need_ubo_staging_buffer_reset) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         need_uniform_write = true;
+        need_descriptor_write = true;
     }
-
-    VkWriteDescriptorSet descriptor_writes[2 + NV2A_MAX_TEXTURES];
-
-    assert(r->descriptor_set_index < ARRAY_SIZE(r->descriptor_sets));
 
     if (need_uniform_write) {
         for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
@@ -184,14 +309,28 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
                 r->device_props.limits.minUniformBufferOffsetAlignment);
         }
 
+        r->uniform_buffer_offsets_valid = true;
         r->uniforms_changed = false;
     }
+
+    /*
+     * UBO bindings use dynamic offsets, so changing uniform contents only needs
+     * a new buffer slice. The descriptor set itself only has to be rewritten
+     * when the shader layout or sampled textures change.
+     */
+    if (!need_descriptor_write) {
+        return;
+    }
+
+    VkWriteDescriptorSet descriptor_writes[2 + NV2A_MAX_TEXTURES];
+
+    assert(r->descriptor_set_index < ARRAY_SIZE(r->descriptor_sets));
 
     VkDescriptorBufferInfo ubo_buffer_infos[2];
     for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
         ubo_buffer_infos[i] = (VkDescriptorBufferInfo){
             .buffer = r->storage_buffers[BUFFER_UNIFORM].buffer,
-            .offset = r->uniform_buffer_offsets[i],
+            .offset = 0,
             .range = layouts[i]->total_size,
         };
         descriptor_writes[i] = (VkWriteDescriptorSet){
@@ -199,7 +338,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
             .dstSet = r->descriptor_sets[r->descriptor_set_index],
             .dstBinding = i == 0 ? VSH_UBO_BINDING : PSH_UBO_BINDING,
             .dstArrayElement = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             .descriptorCount = 1,
             .pBufferInfo = &ubo_buffer_infos[i],
         };
@@ -326,7 +465,6 @@ static void shader_module_cache_entry_init(Lru *lru, LruNode *node,
     ShaderModuleCacheEntry *module =
         container_of(node, ShaderModuleCacheEntry, node);
     memcpy(&module->key, key, sizeof(ShaderModuleCacheKey));
-
     MString *code;
 
     switch (module->key.kind) {
@@ -447,8 +585,11 @@ static void update_shader_uniforms(PGRAPHState *pg)
 
     assert(r->shader_binding);
     ShaderBinding *binding = r->shader_binding;
-    ShaderUniformLayout *layouts[] = { &binding->vsh.module_info->uniforms,
-                                       &binding->psh.module_info->uniforms };
+    if (!shader_uniforms_dirty(pg, binding)) {
+        nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_NOTDIRTY);
+        NV2A_VK_DGROUP_END();
+        return;
+    }
 
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
@@ -462,32 +603,24 @@ static void update_shader_uniforms(PGRAPHState *pg)
                                        &psh_values);
     for (int i = 0; i < 4; i++) {
         assert(r->texture_bindings[i] != NULL);
-        float scale = r->texture_bindings[i]->key.scale;
-
-        BasicColorFormatInfo f_basic =
-            kelvin_color_format_info_map[pg->vk_renderer_state
-                                             ->texture_bindings[i]
-                                             ->key.state.color_format];
-        if (!f_basic.linear) {
-            scale = 1.0;
-        }
+        float scale = get_texture_uniform_scale(r, i);
 
         psh_values.texScale[i] = scale;
+        r->uniform_texture_scales[i] = scale;
     }
     apply_uniform_updates(&binding->psh.module_info->uniforms, PshUniformInfo,
                           binding->psh.uniform_locs, &psh_values,
                           PshUniform__COUNT);
 
-    for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
-        uint64_t hash =
-            fast_hash(layouts[i]->allocation, layouts[i]->total_size);
-        r->uniforms_changed |= (hash != r->uniform_buffer_hashes[i]);
-        r->uniform_buffer_hashes[i] = hash;
-    }
-
-    nv2a_profile_inc_counter(r->uniforms_changed ?
-                                 NV2A_PROF_SHADER_UBO_DIRTY :
-                                 NV2A_PROF_SHADER_UBO_NOTDIRTY);
+    /*
+     * Rebuilding uniform data is already required for the current draw. Avoid
+     * hashing the full UBO contents afterwards and walking the same data twice.
+     * Dynamic UBO offsets let the descriptor set reuse the previous binding
+     * when only the uploaded uniform slice changes.
+     */
+    r->uniforms_changed = true;
+    r->uniform_dirty_generation = pg->uniform_dirty_generation;
+    nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
 
     NV2A_VK_DGROUP_END();
 }
@@ -500,8 +633,11 @@ void pgraph_vk_bind_shaders(PGRAPHState *pg)
 
     r->shader_bindings_changed = false;
 
-    if (!r->shader_binding ||
-        pgraph_glsl_check_shader_state_dirty(pg, &r->shader_binding->state)) {
+    bool shader_state_dirty =
+        !r->shader_binding ||
+        pgraph_glsl_check_shader_state_dirty(pg, &r->shader_binding->state);
+
+    if (shader_state_dirty) {
         ShaderState new_state = pgraph_glsl_get_shader_state(pg);
         if (!r->shader_binding || memcmp(&r->shader_binding->state, &new_state,
                                          sizeof(ShaderState))) {

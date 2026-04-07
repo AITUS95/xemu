@@ -1047,11 +1047,19 @@ static void bind_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     assert(r->descriptor_set_index >= 1);
+    assert(r->uniform_buffer_offsets_valid);
+    assert(r->uniform_buffer_offsets[0] <= UINT32_MAX);
+    assert(r->uniform_buffer_offsets[1] <= UINT32_MAX);
+
+    uint32_t dynamic_offsets[] = {
+        r->uniform_buffer_offsets[0],
+        r->uniform_buffer_offsets[1],
+    };
 
     vkCmdBindDescriptorSets(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             r->pipeline_binding->layout, 0, 1,
-                            &r->descriptor_sets[r->descriptor_set_index - 1], 0,
-                            NULL);
+                            &r->descriptor_sets[r->descriptor_set_index - 1],
+                            ARRAY_SIZE(dynamic_offsets), dynamic_offsets);
 }
 
 static void begin_query(PGRAPHVkState *r)

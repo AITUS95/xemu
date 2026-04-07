@@ -426,8 +426,10 @@ typedef struct PGRAPHVkState {
     ShaderModuleCacheEntry *shader_module_cache_entries;
 
     // FIXME: Merge these into a structure
-    uint64_t uniform_buffer_hashes[2];
     size_t uniform_buffer_offsets[2];
+    bool uniform_buffer_offsets_valid;
+    uint32_t uniform_dirty_generation;
+    float uniform_texture_scales[NV2A_MAX_TEXTURES];
     bool uniforms_changed;
 
     VkQueryPool query_pool;
