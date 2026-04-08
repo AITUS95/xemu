@@ -189,7 +189,6 @@ typedef struct PGRAPHState {
     uint32_t program_data[NV2A_MAX_TRANSFORM_PROGRAM_LENGTH][VSH_TOKEN_SIZE];
     bool program_data_dirty;
 
-    uint32_t uniform_dirty_generation;
     uint32_t vsh_constants[NV2A_VERTEXSHADER_CONSTANTS][4];
     bool vsh_constants_dirty[NV2A_VERTEXSHADER_CONSTANTS];
 
@@ -314,34 +313,6 @@ static inline void pgraph_reg_w(PGRAPHState *pg, unsigned int r, uint32_t v)
         bitmap_set(pg->regs_dirty, r / sizeof(uint32_t), 1);
     }
     pg->regs_[r] = v;
-}
-
-static inline void pgraph_mark_uniforms_dirty(PGRAPHState *pg)
-{
-    pg->uniform_dirty_generation++;
-}
-
-static inline void pgraph_uniform_u32_w(PGRAPHState *pg, uint32_t *dst,
-                                        uint32_t v)
-{
-    if (*dst != v) {
-        *dst = v;
-        pgraph_mark_uniforms_dirty(pg);
-    }
-}
-
-static inline void pgraph_uniform_float_w(PGRAPHState *pg, float *dst,
-                                          uint32_t v)
-{
-    float f;
-    uint32_t old;
-
-    memcpy(&old, dst, sizeof(old));
-    if (old != v) {
-        memcpy(&f, &v, sizeof(f));
-        *dst = f;
-        pgraph_mark_uniforms_dirty(pg);
-    }
 }
 
 void pgraph_clear_dirty_reg_map(PGRAPHState *pg);

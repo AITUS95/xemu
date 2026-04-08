@@ -137,44 +137,6 @@ static void destroy_descriptor_sets(PGRAPHState *pg)
     }
 }
 
-static bool any_reg_dirty(PGRAPHState *pg, const unsigned int *regs,
-                          size_t count)
-{
-    for (int i = 0; i < count; i++) {
-        if (pgraph_is_reg_dirty(pg, regs[i])) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool reg_range_dirty(PGRAPHState *pg, unsigned int first_reg,
-                            size_t count)
-{
-    for (int i = 0; i < count; i++) {
-        if (pgraph_is_reg_dirty(pg, first_reg + i * 4)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool psh_bump_regs_dirty(PGRAPHState *pg)
-{
-    for (int i = 0; i < 3; i++) {
-        if (pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT00 + i * 4) ||
-            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT01 + i * 4) ||
-            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT10 + i * 4) ||
-            pgraph_is_reg_dirty(pg, NV_PGRAPH_BUMPMAT11 + i * 4)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static float get_texture_uniform_scale(PGRAPHVkState *r, int texture_idx)
 {
     TextureBinding *binding = r->texture_bindings[texture_idx];
@@ -188,78 +150,6 @@ static float get_texture_uniform_scale(PGRAPHVkState *r, int texture_idx)
         kelvin_color_format_info_map[binding->key.state.color_format];
 
     return f_basic.linear ? scale : 1.0f;
-}
-
-static bool shader_uniforms_dirty(PGRAPHState *pg, ShaderBinding *binding)
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-
-    if (!r->uniform_buffer_offsets_valid || r->shader_bindings_changed ||
-        r->framebuffer_dirty ||
-        (r->uniform_dirty_generation != pg->uniform_dirty_generation)) {
-        return true;
-    }
-
-    if (r->texture_bindings_changed) {
-        /*
-         * Texture descriptor changes only affect the UBO through texScale. Avoid
-         * rebuilding uniform data when the image/sampler changed but the scale
-         * visible to the shader stayed the same.
-         */
-        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-            if (r->uniform_texture_scales[i] !=
-                get_texture_uniform_scale(r, i)) {
-                return true;
-            }
-        }
-    }
-
-    const unsigned int common_regs[] = {
-        NV_PGRAPH_ZCLIPMIN,
-        NV_PGRAPH_ZCLIPMAX,
-    };
-    if (any_reg_dirty(pg, common_regs, ARRAY_SIZE(common_regs))) {
-        return true;
-    }
-
-    if (binding->vsh.uniform_locs[VshUniform_inlineValue] != -1 &&
-        !r->use_push_constants_for_uniform_attrs) {
-        /*
-         * Inline vertex attribute values are not tracked with register dirty
-         * bits. On current hardware this path usually uses push constants, but
-         * keep the UBO fallback conservative.
-         */
-        return true;
-    }
-
-    const unsigned int vsh_regs[] = {
-        NV_PGRAPH_FOGPARAM0,
-        NV_PGRAPH_FOGPARAM1,
-    };
-    if (any_reg_dirty(pg, vsh_regs, ARRAY_SIZE(vsh_regs))) {
-        return true;
-    }
-
-    const unsigned int psh_regs[] = {
-        NV_PGRAPH_CONTROL_0,       NV_PGRAPH_FOGCOLOR,
-        NV_PGRAPH_SETUPRASTER,     NV_PGRAPH_ZOFFSETBIAS,
-        NV_PGRAPH_ZOFFSETFACTOR,
-    };
-    if (any_reg_dirty(pg, psh_regs, ARRAY_SIZE(psh_regs)) ||
-        reg_range_dirty(pg, NV_PGRAPH_SPECFOGFACTOR0, 2) ||
-        reg_range_dirty(pg, NV_PGRAPH_COLORKEYCOLOR0, 4) ||
-        reg_range_dirty(pg, NV_PGRAPH_COMBINEFACTOR0, 8) ||
-        reg_range_dirty(pg, NV_PGRAPH_COMBINEFACTOR1, 8) ||
-        reg_range_dirty(pg, NV_PGRAPH_TEXFMT0, NV2A_MAX_TEXTURES) ||
-        reg_range_dirty(pg, NV_PGRAPH_BUMPSCALE1, 3) ||
-        reg_range_dirty(pg, NV_PGRAPH_BUMPOFFSET1, 3) ||
-        reg_range_dirty(pg, NV_PGRAPH_WINDOWCLIPX0, 8) ||
-        reg_range_dirty(pg, NV_PGRAPH_WINDOWCLIPY0, 8) ||
-        psh_bump_regs_dirty(pg)) {
-        return true;
-    }
-
-    return false;
 }
 
 void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
@@ -575,7 +465,12 @@ static void apply_uniform_updates(ShaderUniformLayout *layout,
     }
 }
 
-// FIXME: Dirty tracking
+/*
+ * Keep Vulkan uniform uploads conservative for now. Several shader inputs are
+ * derived from mixed PGRAPH state, texture state, and generated values, and
+ * the aggressive skip path proved too easy to desynchronize and caused visual
+ * artifacts.
+ */
 static void update_shader_uniforms(PGRAPHState *pg)
 {
     NV2A_VK_DGROUP_BEGIN("%s", __func__);
@@ -585,11 +480,6 @@ static void update_shader_uniforms(PGRAPHState *pg)
 
     assert(r->shader_binding);
     ShaderBinding *binding = r->shader_binding;
-    if (!shader_uniforms_dirty(pg, binding)) {
-        nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_NOTDIRTY);
-        NV2A_VK_DGROUP_END();
-        return;
-    }
 
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
@@ -606,7 +496,6 @@ static void update_shader_uniforms(PGRAPHState *pg)
         float scale = get_texture_uniform_scale(r, i);
 
         psh_values.texScale[i] = scale;
-        r->uniform_texture_scales[i] = scale;
     }
     apply_uniform_updates(&binding->psh.module_info->uniforms, PshUniformInfo,
                           binding->psh.uniform_locs, &psh_values,
@@ -619,7 +508,6 @@ static void update_shader_uniforms(PGRAPHState *pg)
      * when only the uploaded uniform slice changes.
      */
     r->uniforms_changed = true;
-    r->uniform_dirty_generation = pg->uniform_dirty_generation;
     nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
 
     NV2A_VK_DGROUP_END();
