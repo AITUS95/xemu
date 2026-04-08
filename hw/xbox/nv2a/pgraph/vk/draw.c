@@ -634,9 +634,8 @@ static bool check_pipeline_dirty(PGRAPHState *pg)
     }
 
     const unsigned int regs[] = {
-        NV_PGRAPH_BLEND,       NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_0,
-        NV_PGRAPH_CONTROL_1,   NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,
-        NV_PGRAPH_SETUPRASTER, NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
+        NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0, NV_PGRAPH_CONTROL_1,
+        NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3, NV_PGRAPH_SETUPRASTER,
     };
 
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
@@ -676,17 +675,27 @@ static void init_pipeline_key(PGRAPHState *pg, PipelineKey *key)
            sizeof(key->attribute_descriptions[0]) *
                r->num_active_vertex_attribute_descriptions);
 
-    // FIXME: Register masking
-    // FIXME: Use more dynamic state updates
+    /*
+     * Blend constants are programmed with vkCmdSetBlendConstants, and polygon
+     * offset values are already sourced through fragment shader uniforms.
+     */
     const int regs[] = {
-        NV_PGRAPH_BLEND,       NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_0,
-        NV_PGRAPH_CONTROL_1,   NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,
-        NV_PGRAPH_SETUPRASTER, NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
+        NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0, NV_PGRAPH_CONTROL_1,
+        NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3, NV_PGRAPH_SETUPRASTER,
     };
-    assert(ARRAY_SIZE(regs) == ARRAY_SIZE(key->regs));
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
         key->regs[i] = pgraph_reg_r(pg, regs[i]);
     }
+}
+
+static void set_blend_constants(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    float blend_constants[4];
+
+    pgraph_argb_pack32_to_rgba_float(pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR),
+                                     blend_constants);
+    vkCmdSetBlendConstants(r->command_buffer, blend_constants);
 }
 
 static void create_pipeline(PGRAPHState *pg)
@@ -1504,6 +1513,7 @@ static void begin_draw(PGRAPHState *pg)
     }
 
     if (!pg->clearing) {
+        set_blend_constants(pg);
         bind_descriptor_sets(pg);
         push_vertex_attr_values(pg);
     }
