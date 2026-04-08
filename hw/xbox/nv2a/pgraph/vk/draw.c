@@ -714,6 +714,19 @@ static void create_pipeline(PGRAPHState *pg)
 
     PipelineKey key;
     init_pipeline_key(pg, &key);
+
+    /*
+     * Redundant state writes can mark pipeline inputs dirty without actually
+     * changing the effective Vulkan pipeline configuration. Reuse the current
+     * binding directly in that case and avoid hashing and LRU lookup.
+     */
+    if (r->pipeline_binding &&
+        !memcmp(&r->pipeline_binding->key, &key, sizeof(key))) {
+        NV2A_VK_DPRINTF("Cache hit (current binding)");
+        NV2A_VK_DGROUP_END();
+        return;
+    }
+
     uint64_t hash = fast_hash((void *)&key, sizeof(key));
 
     LruNode *node = lru_lookup(&r->pipeline_cache, hash, &key);
