@@ -19,8 +19,185 @@
 
 #include "qemu/osdep.h"
 #include "qemu/fast-hash.h"
+#include "xemu-version.h"
+#include "ui/xemu-settings.h"
 #include "renderer.h"
 #include <math.h>
+
+#define NV2A_VK_PIPELINE_CACHE_MAGIC 0x58565043u
+#define NV2A_VK_PIPELINE_CACHE_VERSION 1u
+
+typedef struct NV2AVkPipelineCacheHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t vendor_id;
+    uint32_t device_id;
+    uint32_t driver_version;
+    uint8_t pipeline_cache_uuid[VK_UUID_SIZE];
+    uint64_t xemu_version_len;
+} NV2AVkPipelineCacheHeader;
+
+static char *get_vk_cache_dir(void)
+{
+    return g_strdup_printf("%svulkan", xemu_settings_get_base_path());
+}
+
+static char *get_vk_pipeline_cache_path(void)
+{
+    return g_strdup_printf("%s/vulkan/pipeline_cache.bin",
+                           xemu_settings_get_base_path());
+}
+
+static void invalidate_vk_pipeline_cache_file(void)
+{
+    char *path = get_vk_pipeline_cache_path();
+
+    qemu_unlink(path);
+    g_free(path);
+}
+
+static bool load_vk_pipeline_cache_blob(PGRAPHVkState *r, void **data,
+                                        size_t *size)
+{
+    FILE *cache_file;
+    NV2AVkPipelineCacheHeader header;
+    uint64_t blob_size;
+    char *path = get_vk_pipeline_cache_path();
+    char *cached_xemu_version = NULL;
+    size_t nread;
+    bool ok = false;
+
+    *data = NULL;
+    *size = 0;
+
+    cache_file = qemu_fopen(path, "rb");
+    if (!cache_file) {
+        goto out;
+    }
+
+#define READ_OR_FAIL(ptr, len)                     \
+    do {                                           \
+        nread = fread((ptr), (len), 1, cache_file); \
+        if (nread != 1) {                          \
+            goto invalidate;                       \
+        }                                          \
+    } while (0)
+
+    READ_OR_FAIL(&header, sizeof(header));
+    if (header.magic != NV2A_VK_PIPELINE_CACHE_MAGIC ||
+        header.version != NV2A_VK_PIPELINE_CACHE_VERSION ||
+        header.vendor_id != r->device_props.vendorID ||
+        header.device_id != r->device_props.deviceID ||
+        header.driver_version != r->device_props.driverVersion ||
+        memcmp(header.pipeline_cache_uuid, r->device_props.pipelineCacheUUID,
+               VK_UUID_SIZE) != 0 ||
+        header.xemu_version_len == 0 ||
+        header.xemu_version_len > 4096) {
+        goto invalidate;
+    }
+
+    cached_xemu_version = g_malloc(header.xemu_version_len);
+    READ_OR_FAIL(cached_xemu_version, header.xemu_version_len);
+    if (strcmp(cached_xemu_version, xemu_version) != 0) {
+        goto invalidate;
+    }
+
+    READ_OR_FAIL(&blob_size, sizeof(blob_size));
+    if (blob_size == 0 || blob_size > SIZE_MAX) {
+        goto invalidate;
+    }
+
+    *data = g_malloc(blob_size);
+    READ_OR_FAIL(*data, blob_size);
+    *size = blob_size;
+    ok = true;
+    goto out_close;
+
+invalidate:
+    invalidate_vk_pipeline_cache_file();
+    g_free(*data);
+    *data = NULL;
+    *size = 0;
+
+out_close:
+    fclose(cache_file);
+#undef READ_OR_FAIL
+out:
+    g_free(cached_xemu_version);
+    g_free(path);
+    return ok;
+}
+
+static void save_vk_pipeline_cache(PGRAPHVkState *r)
+{
+    NV2AVkPipelineCacheHeader header = {
+        .magic = NV2A_VK_PIPELINE_CACHE_MAGIC,
+        .version = NV2A_VK_PIPELINE_CACHE_VERSION,
+        .vendor_id = r->device_props.vendorID,
+        .device_id = r->device_props.deviceID,
+        .driver_version = r->device_props.driverVersion,
+        .xemu_version_len = strlen(xemu_version) + 1,
+    };
+    char *cache_dir = get_vk_cache_dir();
+    char *cache_path = get_vk_pipeline_cache_path();
+    FILE *cache_file = NULL;
+    void *data = NULL;
+    size_t data_size = 0;
+    bool ok = false;
+
+    memcpy(header.pipeline_cache_uuid, r->device_props.pipelineCacheUUID,
+           VK_UUID_SIZE);
+
+    if (g_mkdir_with_parents(cache_dir, 0700) < 0) {
+        goto out;
+    }
+
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &data_size,
+                               NULL) != VK_SUCCESS ||
+        data_size == 0) {
+        goto out;
+    }
+
+    data = g_malloc(data_size);
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &data_size,
+                               data) != VK_SUCCESS) {
+        goto out;
+    }
+
+    cache_file = qemu_fopen(cache_path, "wb");
+    if (!cache_file) {
+        goto out;
+    }
+
+#define WRITE_OR_FAIL(ptr, len)                        \
+    do {                                               \
+        if (fwrite((ptr), (len), 1, cache_file) != 1) { \
+            goto out;                                  \
+        }                                              \
+    } while (0)
+
+    WRITE_OR_FAIL(&header, sizeof(header));
+    WRITE_OR_FAIL(xemu_version, header.xemu_version_len);
+    {
+        uint64_t blob_size = data_size;
+        WRITE_OR_FAIL(&blob_size, sizeof(blob_size));
+    }
+    WRITE_OR_FAIL(data, data_size);
+#undef WRITE_OR_FAIL
+
+    ok = true;
+
+out:
+    if (cache_file) {
+        fclose(cache_file);
+    }
+    if (!ok) {
+        qemu_unlink(cache_path);
+    }
+    g_free(data);
+    g_free(cache_path);
+    g_free(cache_dir);
+}
 
 void pgraph_vk_draw_begin(NV2AState *d)
 {
@@ -124,6 +301,8 @@ static bool pipeline_cache_entry_compare(Lru *lru, LruNode *node,
 static void init_pipeline_cache(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    void *initial_data = NULL;
+    size_t initial_data_size = 0;
 
     VkPipelineCacheCreateInfo cache_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
@@ -132,8 +311,23 @@ static void init_pipeline_cache(PGRAPHState *pg)
         .pInitialData = NULL,
         .pNext = NULL,
     };
-    VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
-                                   &r->vk_pipeline_cache));
+    if (load_vk_pipeline_cache_blob(r, &initial_data, &initial_data_size)) {
+        cache_info.initialDataSize = initial_data_size;
+        cache_info.pInitialData = initial_data;
+    }
+
+    VkResult res =
+        vkCreatePipelineCache(r->device, &cache_info, NULL, &r->vk_pipeline_cache);
+    if (res != VK_SUCCESS && initial_data) {
+        invalidate_vk_pipeline_cache_file();
+        cache_info.initialDataSize = 0;
+        cache_info.pInitialData = NULL;
+        VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                       &r->vk_pipeline_cache));
+    } else {
+        VK_CHECK(res);
+    }
+    g_free(initial_data);
 
     const size_t pipeline_cache_size = 2048;
     lru_init(&r->pipeline_cache);
@@ -157,6 +351,7 @@ static void finalize_pipeline_cache(PGRAPHState *pg)
     g_free(r->pipeline_cache_entries);
     r->pipeline_cache_entries = NULL;
 
+    save_vk_pipeline_cache(r);
     vkDestroyPipelineCache(r->device, r->vk_pipeline_cache, NULL);
 }
 
