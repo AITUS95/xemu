@@ -453,21 +453,16 @@ static ShaderBinding *get_shader_binding_for_state(PGRAPHVkState *r,
     return binding;
 }
 
-static bool apply_uniform_updates(ShaderUniformLayout *layout,
+static void apply_uniform_updates(ShaderUniformLayout *layout,
                                   const UniformInfo *info, int *locs,
                                   void *values, size_t count)
 {
-    bool changed = false;
-
     for (int i = 0; i < count; i++) {
         if (locs[i] != -1) {
-            changed |= uniform_copy(layout, locs[i],
-                                    (char *)values + info[i].val_offs, 4,
-                                    (info[i].size * info[i].count) / 4);
+            uniform_copy(layout, locs[i], (char*)values + info[i].val_offs,
+                         4, (info[i].size * info[i].count) / 4);
         }
     }
-
-    return changed;
 }
 
 /*
@@ -488,11 +483,10 @@ static void update_shader_uniforms(PGRAPHState *pg)
 
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
-                                       binding->vsh.uniform_locs, &vsh_values);
-    bool vsh_changed =
-        apply_uniform_updates(&binding->vsh.module_info->uniforms,
-                              VshUniformInfo, binding->vsh.uniform_locs,
-                              &vsh_values, VshUniform__COUNT);
+                                  binding->vsh.uniform_locs, &vsh_values);
+    apply_uniform_updates(&binding->vsh.module_info->uniforms, VshUniformInfo,
+                          binding->vsh.uniform_locs, &vsh_values,
+                          VshUniform__COUNT);
 
     PshUniformValues psh_values;
     pgraph_glsl_set_psh_uniform_values(pg, binding->psh.uniform_locs,
@@ -503,25 +497,18 @@ static void update_shader_uniforms(PGRAPHState *pg)
 
         psh_values.texScale[i] = scale;
     }
-    bool psh_changed =
-        apply_uniform_updates(&binding->psh.module_info->uniforms,
-                              PshUniformInfo, binding->psh.uniform_locs,
-                              &psh_values, PshUniform__COUNT);
+    apply_uniform_updates(&binding->psh.module_info->uniforms, PshUniformInfo,
+                          binding->psh.uniform_locs, &psh_values,
+                          PshUniform__COUNT);
 
     /*
-     * Dynamic UBO offsets let descriptor sets survive across draws. Rebuild the
-     * uniform values every time for correctness, but only allocate and upload a
-     * new UBO slice when the final bytes actually changed or a new shader
-     * layout requires fresh backing storage.
+     * Rebuilding uniform data is already required for the current draw. Avoid
+     * hashing the full UBO contents afterwards and walking the same data twice.
+     * Dynamic UBO offsets let the descriptor set reuse the previous binding
+     * when only the uploaded uniform slice changes.
      */
-    r->uniforms_changed =
-        r->shader_bindings_changed || !r->uniform_buffer_offsets_valid ||
-        vsh_changed || psh_changed;
-    if (r->uniforms_changed) {
-        nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
-    } else {
-        nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_NOTDIRTY);
-    }
+    r->uniforms_changed = true;
+    nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
 
     NV2A_VK_DGROUP_END();
 }
