@@ -19,6 +19,7 @@
 
 #include "qemu/fast-hash.h"
 #include "ui/xemu-settings.h"
+#include "xemu-xbe.h"
 #include "xemu-version.h"
 #include "renderer.h"
 
@@ -41,25 +42,59 @@ typedef struct NV2AVkShaderCacheHeader {
     uint64_t spirv_size;
 } NV2AVkShaderCacheHeader;
 
+static void save_vk_shader_cache_blob(VkShaderStageFlagBits stage,
+                                      const char *glsl, GByteArray *spv);
+
 static const char *get_vk_shader_cache_build_id(void)
 {
     return xemu_commit;
 }
 
-static char *get_vk_shader_cache_dir(uint64_t hash, bool debug_shaders)
+static char *get_vk_shader_cache_dir_for_key(uint64_t hash, bool debug_shaders,
+                                             const char *cache_key)
+{
+    return g_strdup_printf("%svulkan/shaders/%s/%u/%04" PRIx64,
+                           xemu_settings_get_base_path(),
+                           cache_key,
+                           debug_shaders ? 1 : 0, hash >> 48);
+}
+
+static char *get_vk_legacy_shader_cache_dir(uint64_t hash, bool debug_shaders)
 {
     return g_strdup_printf("%svulkan/shaders/%u/%04" PRIx64,
                            xemu_settings_get_base_path(),
                            debug_shaders ? 1 : 0, hash >> 48);
 }
 
-static char *get_vk_shader_cache_path(VkShaderStageFlagBits stage,
-                                      uint64_t hash, bool debug_shaders)
+static char *get_vk_shader_cache_path_in_dir(const char *cache_dir,
+                                             VkShaderStageFlagBits stage,
+                                             uint64_t hash)
 {
-    char *cache_dir = get_vk_shader_cache_dir(hash, debug_shaders);
     char *cache_path =
         g_strdup_printf("%s/%u-%012" PRIx64 ".bin", cache_dir, stage,
                         hash & (((uint64_t)1 << 48) - 1));
+    return cache_path;
+}
+
+static char *get_vk_shader_cache_path_for_key(VkShaderStageFlagBits stage,
+                                              uint64_t hash,
+                                              bool debug_shaders,
+                                              const char *cache_key)
+{
+    char *cache_dir =
+        get_vk_shader_cache_dir_for_key(hash, debug_shaders, cache_key);
+    char *cache_path = get_vk_shader_cache_path_in_dir(cache_dir, stage, hash);
+
+    g_free(cache_dir);
+    return cache_path;
+}
+
+static char *get_vk_legacy_shader_cache_path(VkShaderStageFlagBits stage,
+                                             uint64_t hash,
+                                             bool debug_shaders)
+{
+    char *cache_dir = get_vk_legacy_shader_cache_dir(hash, debug_shaders);
+    char *cache_path = get_vk_shader_cache_path_in_dir(cache_dir, stage, hash);
 
     g_free(cache_dir);
     return cache_path;
@@ -76,6 +111,7 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
     FILE *cache_file;
     NV2AVkShaderCacheHeader header;
     g_autofree char *cache_path = NULL;
+    g_autofree char *cache_key = NULL;
     g_autofree char *cached_build_id = NULL;
     const char *build_id = get_vk_shader_cache_build_id();
     const bool debug_shaders = g_config.display.vulkan.debug_shaders;
@@ -83,6 +119,7 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
     const uint64_t glsl_hash = fast_hash((void *)glsl, glsl_len);
     size_t nread;
     bool ok = false;
+    bool loaded_from_legacy = false;
 
     *spv = NULL;
 
@@ -90,10 +127,19 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         return false;
     }
 
-    cache_path = get_vk_shader_cache_path(stage, glsl_hash, debug_shaders);
+    cache_key = xemu_get_current_title_cache_key();
+    cache_path = get_vk_shader_cache_path_for_key(stage, glsl_hash,
+                                                  debug_shaders, cache_key);
     cache_file = qemu_fopen(cache_path, "rb");
     if (!cache_file) {
-        return false;
+        g_free(g_steal_pointer(&cache_path));
+        cache_path = get_vk_legacy_shader_cache_path(stage, glsl_hash,
+                                                     debug_shaders);
+        loaded_from_legacy = true;
+        cache_file = qemu_fopen(cache_path, "rb");
+        if (!cache_file) {
+            return false;
+        }
     }
 
 #define READ_OR_FAIL(ptr, len)                     \
@@ -129,6 +175,9 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         READ_OR_FAIL(data, header.spirv_size);
         *spv = g_byte_array_new_take(g_steal_pointer(&data), header.spirv_size);
     }
+    if (loaded_from_legacy) {
+        save_vk_shader_cache_blob(stage, glsl, *spv);
+    }
     ok = true;
     goto out_close;
 
@@ -154,11 +203,13 @@ static void save_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         .glsl_hash = fast_hash((void *)glsl, strlen(glsl)),
         .spirv_size = spv->len,
     };
+    g_autofree char *cache_key = xemu_get_current_title_cache_key();
     g_autofree char *cache_dir =
-        get_vk_shader_cache_dir(header.glsl_hash, header.debug_shaders);
+        get_vk_shader_cache_dir_for_key(header.glsl_hash,
+                                        header.debug_shaders, cache_key);
     g_autofree char *cache_path =
-        get_vk_shader_cache_path(stage, header.glsl_hash,
-                                 header.debug_shaders);
+        get_vk_shader_cache_path_for_key(stage, header.glsl_hash,
+                                         header.debug_shaders, cache_key);
     FILE *cache_file = NULL;
     size_t written;
     bool ok = false;

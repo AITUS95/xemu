@@ -108,6 +108,9 @@ extern "C" {
 // Get current XBE info
 struct xbe *xemu_get_xbe_info(void);
 
+// Get a stable cache key for the current title, or "global" if unavailable.
+char *xemu_get_current_title_cache_key(void);
+
 #ifdef __cplusplus
 }
 #endif
