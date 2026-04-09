@@ -55,6 +55,11 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                  VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
     };
+    VmaAllocationCreateInfo host_seq_write_alloc_create_info = {
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+    };
     VmaAllocationCreateInfo device_alloc_create_info = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
@@ -67,7 +72,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_STAGING_SRC] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_STAGING_DST].buffer_size,
     };
@@ -94,7 +99,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_INDEX_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_INDEX].buffer_size,
     };
@@ -119,7 +124,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_VERTEX_INLINE_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_VERTEX_INLINE].buffer_size,
     };
@@ -132,7 +137,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_UNIFORM_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_UNIFORM].buffer_size,
     };
