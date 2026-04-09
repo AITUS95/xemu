@@ -235,6 +235,13 @@ typedef struct TextureSamplerBinding {
     uint32_t submit_time;
 } TextureSamplerBinding;
 
+typedef struct DescriptorSetState {
+    VkDeviceSize uniform_ranges[2];
+    VkImageView image_views[NV2A_MAX_TEXTURES];
+    VkSampler samplers[NV2A_MAX_TEXTURES];
+    bool valid;
+} DescriptorSetState;
+
 typedef struct QueryReport {
     QSIMPLEQ_ENTRY(QueryReport) entry;
     bool clear;
@@ -379,6 +386,7 @@ typedef struct PGRAPHVkState {
     VkDescriptorPool descriptor_pool;
     VkDescriptorSetLayout descriptor_set_layout;
     VkDescriptorSet descriptor_sets[1024];
+    DescriptorSetState descriptor_set_states[1024];
     int descriptor_set_index;
 
     StorageBuffer storage_buffers[BUFFER_COUNT];
