@@ -37,6 +37,9 @@ typedef struct NV2AVkPipelineCacheHeader {
     uint64_t xemu_version_len;
 } NV2AVkPipelineCacheHeader;
 
+static PGRAPHVkState *g_vk_pipeline_cache_atexit_state;
+static bool g_vk_pipeline_cache_atexit_registered;
+
 static char *get_vk_cache_dir(void)
 {
     return g_strdup_printf("%svulkan", xemu_settings_get_base_path());
@@ -128,7 +131,7 @@ out:
     return ok;
 }
 
-static void save_vk_pipeline_cache(PGRAPHVkState *r)
+static bool save_vk_pipeline_cache(PGRAPHVkState *r)
 {
     NV2AVkPipelineCacheHeader header = {
         .magic = NV2A_VK_PIPELINE_CACHE_MAGIC,
@@ -197,6 +200,35 @@ out:
     g_free(data);
     g_free(cache_path);
     g_free(cache_dir);
+    return ok;
+}
+
+static void save_vk_pipeline_cache_atexit(void)
+{
+    PGRAPHVkState *r = g_vk_pipeline_cache_atexit_state;
+
+    if (!r || r->device == VK_NULL_HANDLE ||
+        r->vk_pipeline_cache == VK_NULL_HANDLE) {
+        return;
+    }
+
+    save_vk_pipeline_cache(r);
+}
+
+static void register_vk_pipeline_cache_atexit(PGRAPHVkState *r)
+{
+    /*
+     * Closing the host UI can terminate the process before the NV2A device
+     * teardown reaches pgraph_vk_finalize_pipelines(). Keep an atexit
+     * fallback so the pipeline cache is saved while the Vulkan device is
+     * still alive.
+     */
+    g_vk_pipeline_cache_atexit_state = r;
+
+    if (!g_vk_pipeline_cache_atexit_registered) {
+        atexit(save_vk_pipeline_cache_atexit);
+        g_vk_pipeline_cache_atexit_registered = true;
+    }
 }
 
 void pgraph_vk_draw_begin(NV2AState *d)
@@ -328,6 +360,7 @@ static void init_pipeline_cache(PGRAPHState *pg)
         VK_CHECK(res);
     }
     g_free(initial_data);
+    register_vk_pipeline_cache_atexit(r);
 
     const size_t pipeline_cache_size = 2048;
     lru_init(&r->pipeline_cache);
@@ -353,6 +386,11 @@ static void finalize_pipeline_cache(PGRAPHState *pg)
 
     save_vk_pipeline_cache(r);
     vkDestroyPipelineCache(r->device, r->vk_pipeline_cache, NULL);
+    r->vk_pipeline_cache = VK_NULL_HANDLE;
+
+    if (g_vk_pipeline_cache_atexit_state == r) {
+        g_vk_pipeline_cache_atexit_state = NULL;
+    }
 }
 
 static char const *const quad_glsl =
