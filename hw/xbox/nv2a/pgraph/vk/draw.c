@@ -1544,7 +1544,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                  VK_TRUE, UINT64_MAX));
 
         r->descriptor_set_index = 0;
-        r->uniform_buffer_offsets_valid = false;
         r->in_command_buffer = false;
         destroy_framebuffers(pg);
 

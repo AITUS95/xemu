@@ -181,32 +181,6 @@ static bool descriptor_set_state_equal(const DescriptorSetState *a,
            memcmp(a->samplers, b->samplers, sizeof(a->samplers)) == 0;
 }
 
-static bool uniforms_match_staging_slice(PGRAPHState *pg,
-                                         ShaderUniformLayout *layouts[2])
-{
-    PGRAPHVkState *r = pg->vk_renderer_state;
-    StorageBuffer *b = &r->storage_buffers[BUFFER_UNIFORM_STAGING];
-
-    if (!r->uniform_buffer_offsets_valid || !b->mapped) {
-        return false;
-    }
-
-    for (int i = 0; i < ARRAY_SIZE(r->uniform_buffer_offsets); i++) {
-        VkDeviceSize offset = r->uniform_buffer_offsets[i];
-        VkDeviceSize size = layouts[i]->total_size;
-
-        if ((offset + size) > b->buffer_size) {
-            return false;
-        }
-
-        if (memcmp(layouts[i]->allocation, b->mapped + offset, size) != 0) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -229,17 +203,6 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
             &r->descriptor_set_states[r->descriptor_set_index - 1],
             &target_descriptor_state)) {
         need_descriptor_write = false;
-    }
-
-    /*
-     * Keep uniform uploads conservative, but do not append another staging
-     * slice if the rebuilt UBO bytes already match the current slice for this
-     * command buffer.
-     */
-    if (r->uniforms_changed &&
-        uniforms_match_staging_slice(pg, layouts)) {
-        need_uniform_write = false;
-        r->uniforms_changed = false;
     }
 
     if (!(need_descriptor_write || need_uniform_write)) {
