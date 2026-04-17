@@ -1341,21 +1341,30 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
                            CPUTLBEntryFull *full, uintptr_t retaddr)
 {
     ram_addr_t ram_addr = mem_vaddr + full->xlat_section;
+    bool code_dirty = physical_memory_get_dirty_flag(ram_addr,
+                                                     DIRTY_MEMORY_CODE);
+    uint8_t clean_mask;
 
     trace_memory_notdirty_write_access(mem_vaddr, ram_addr, size);
 
-    if (!physical_memory_get_dirty_flag(ram_addr, DIRTY_MEMORY_CODE)) {
+    if (!code_dirty) {
         tb_invalidate_phys_range_fast(cpu, ram_addr, size, retaddr);
+        code_dirty = physical_memory_get_dirty_flag(ram_addr,
+                                                    DIRTY_MEMORY_CODE);
     }
 
     /*
      * Set both VGA and migration bits for simplicity and to remove
      * the notdirty callback faster.
      */
-    physical_memory_set_dirty_range(ram_addr, size, DIRTY_CLIENTS_NOCODE);
+    clean_mask = physical_memory_range_includes_clean(ram_addr, size,
+                                                      DIRTY_CLIENTS_NOCODE);
+    if (clean_mask) {
+        physical_memory_set_dirty_range(ram_addr, size, clean_mask);
+    }
 
     /* We remove the notdirty callback only if the code has been flushed. */
-    if (!physical_memory_is_clean(ram_addr)) {
+    if (code_dirty) {
         trace_memory_notdirty_set_dirty(mem_vaddr);
         tlb_set_dirty(cpu, mem_vaddr);
     }
