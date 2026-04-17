@@ -1402,25 +1402,48 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
 static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *buffer = &r->storage_buffers[BUFFER_VERTEX_RAM];
+    VkDeviceSize atom_size = MAX((VkDeviceSize)1,
+                                 r->device_props.limits.nonCoherentAtomSize);
+    unsigned long start_page;
 
-    VK_CHECK(vmaFlushAllocation(
-        r->allocator, r->storage_buffers[BUFFER_VERTEX_RAM].allocation, 0,
-        VK_WHOLE_SIZE));
+    start_page = find_next_bit(r->uploaded_bitmap, r->bitmap_size, 0);
+    if (start_page >= r->bitmap_size) {
+        return;
+    }
 
-    VkBufferMemoryBarrier barrier = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .buffer = r->storage_buffers[BUFFER_VERTEX_RAM].buffer,
-        .offset = 0,
-        .size = VK_WHOLE_SIZE,
-    };
+    while (start_page < r->bitmap_size) {
+        unsigned long end_page = find_next_zero_bit(r->uploaded_bitmap,
+                                                    r->bitmap_size,
+                                                    start_page);
+        VkDeviceSize range_offset = (VkDeviceSize)start_page * TARGET_PAGE_SIZE;
+        VkDeviceSize range_end = MIN((VkDeviceSize)end_page * TARGET_PAGE_SIZE,
+                                     buffer->buffer_size);
+        VkDeviceSize flush_offset = QEMU_ALIGN_DOWN(range_offset, atom_size);
+        VkDeviceSize flush_end = MIN(QEMU_ALIGN_UP(range_end, atom_size),
+                                     buffer->buffer_size);
+        VkDeviceSize flush_size = flush_end - flush_offset;
+        VkBufferMemoryBarrier barrier = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = buffer->buffer,
+            .offset = range_offset,
+            .size = range_end - range_offset,
+        };
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
-                         &barrier, 0, NULL);
+        VK_CHECK(vmaFlushAllocation(r->allocator, buffer->allocation,
+                                    flush_offset, flush_size));
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
+                             &barrier, 0, NULL);
+
+        start_page = find_next_bit(r->uploaded_bitmap, r->bitmap_size, end_page);
+    }
+
+    bitmap_clear(r->uploaded_bitmap, 0, r->bitmap_size);
 }
 
 static void begin_render_pass(PGRAPHState *pg)
@@ -1496,7 +1519,6 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         sync_staging_buffer(pg, cmd, BUFFER_VERTEX_INLINE_STAGING,
                                 BUFFER_VERTEX_INLINE);
         sync_staging_buffer(pg, cmd, BUFFER_UNIFORM_STAGING, BUFFER_UNIFORM);
-        bitmap_clear(r->uploaded_bitmap, 0, r->bitmap_size);
         flush_memory_buffer(pg, cmd);
         VK_CHECK(vkEndCommandBuffer(r->aux_command_buffer));
         r->in_aux_command_buffer = false;
