@@ -130,6 +130,47 @@ static bool check_surface_overlaps_range(const SurfaceBinding *surface,
     return !(surface->vram_addr >= range_end || range_start >= surface_end);
 }
 
+static bool surface_can_download_partial(PGRAPHState *pg,
+                                         const SurfaceBinding *surface)
+{
+    bool use_compute_to_convert_depth_stencil_format =
+        surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
+        surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+
+    return !surface->swizzle &&
+           pg->surface_scale_factor == 1 &&
+           !use_compute_to_convert_depth_stencil_format &&
+           !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) &&
+           surface->fmt.bytes_per_pixel == surface->host_fmt.host_bytes_per_pixel &&
+           surface->pitch >= surface->width * surface->fmt.bytes_per_pixel;
+}
+
+static void surface_queue_download_range(SurfaceBinding *surface, hwaddr offset,
+                                         hwaddr len)
+{
+    uint32_t row_start, row_end;
+
+    if (!surface->pitch || !surface->height) {
+        return;
+    }
+
+    row_start = MIN(offset / surface->pitch, surface->height);
+    row_end = MIN(DIV_ROUND_UP(offset + len, surface->pitch), surface->height);
+
+    if (row_end <= row_start) {
+        return;
+    }
+
+    if (surface->download_row_start < surface->download_row_end) {
+        surface->download_row_start =
+            MIN(surface->download_row_start, row_start);
+        surface->download_row_end = MAX(surface->download_row_end, row_end);
+    } else {
+        surface->download_row_start = row_start;
+        surface->download_row_end = row_end;
+    }
+}
+
 void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
                                                    hwaddr start, hwaddr size)
 {
@@ -145,7 +186,8 @@ void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
 }
 
 static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
-                                       uint8_t *pixels)
+                                       uint8_t *pixels, uint32_t row_start,
+                                       uint32_t row_count)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -211,6 +253,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     int num_copy_regions = 1;
     VkBufferImageCopy copy_regions[2];
     copy_regions[0] = (VkBufferImageCopy){
+        .imageOffset = { 0, row_start, 0 },
         .imageSubresource.aspectMask = surface->color ?
                                            VK_IMAGE_ASPECT_COLOR_BIT :
                                            VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -220,7 +263,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     VkImage surface_image_loc;
     if (downscale && !use_compute_to_convert_depth_stencil_format) {
         copy_regions[0].imageExtent =
-            (VkExtent3D){ surface->width, surface->height, 1 };
+            (VkExtent3D){ surface->width, row_count, 1 };
 
         if (surface->image_scratch_current_layout !=
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
@@ -263,7 +306,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         surface_image_loc = surface->image_scratch;
     } else {
         copy_regions[0].imageExtent =
-            (VkExtent3D){ scaled_width, scaled_height, 1 };
+            (VkExtent3D){ scaled_width, row_count, 1 };
         surface_image_loc = surface->image;
     }
 
@@ -284,7 +327,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
     //
 
     size_t downloaded_image_size = surface->host_fmt.host_bytes_per_pixel *
-                                   surface->width * surface->height;
+                                   surface->width * row_count;
     assert((downloaded_image_size) <=
            r->storage_buffers[BUFFER_STAGING_DST].buffer_size);
 
@@ -458,7 +501,7 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
 
     memcpy_image(gl_read_buf, staging_dst->mapped, surface->pitch,
                  surface->width * surface->fmt.bytes_per_pixel,
-                 surface->height);
+                 row_count);
 
     if (surface->swizzle) {
         // FIXME: Swizzle in shader
@@ -471,6 +514,8 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
 
 static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
 {
+    PGRAPHState *pg = &d->pgraph;
+
     if (!(surface->download_pending || force) || !surface->width ||
         !surface->height) {
         return;
@@ -478,19 +523,40 @@ static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
 
     // FIXME: Respect write enable at last TOU?
 
-    download_surface_to_buffer(d, surface, d->vram_ptr + surface->vram_addr);
+    uint32_t row_start = 0;
+    uint32_t row_count = surface->height;
 
-    memory_region_set_client_dirty(d->vram, surface->vram_addr,
-                                   surface->pitch * surface->height,
+    if (!force &&
+        surface->download_row_start < surface->download_row_end &&
+        surface_can_download_partial(pg, surface)) {
+        row_start = surface->download_row_start;
+        row_count = surface->download_row_end - surface->download_row_start;
+    }
+
+    download_surface_to_buffer(d, surface,
+                               d->vram_ptr + surface->vram_addr +
+                                   row_start * surface->pitch,
+                               row_start, row_count);
+
+    memory_region_set_client_dirty(d->vram,
+                                   surface->vram_addr +
+                                       row_start * surface->pitch,
+                                   surface->pitch * row_count,
                                    DIRTY_MEMORY_VGA);
-    memory_region_set_client_dirty(d->vram, surface->vram_addr,
-                                   surface->pitch * surface->height,
+    memory_region_set_client_dirty(d->vram,
+                                   surface->vram_addr +
+                                       row_start * surface->pitch,
+                                   surface->pitch * row_count,
                                    DIRTY_MEMORY_NV2A_TEX);
-    memory_region_set_client_dirty(d->vram, surface->vram_addr,
-                                   surface->pitch * surface->height,
+    memory_region_set_client_dirty(d->vram,
+                                   surface->vram_addr +
+                                       row_start * surface->pitch,
+                                   surface->pitch * row_count,
                                    DIRTY_MEMORY_NV2A);
 
     surface->download_pending = false;
+    surface->download_row_start = 0;
+    surface->download_row_end = 0;
     surface->draw_dirty = false;
 }
 
@@ -501,6 +567,8 @@ void pgraph_vk_wait_for_surface_download(SurfaceBinding *surface)
     if (qatomic_read(&surface->draw_dirty)) {
         qemu_mutex_lock(&d->pfifo.lock);
         qemu_event_reset(&d->pgraph.vk_renderer_state->downloads_complete);
+        surface->download_row_start = 0;
+        surface->download_row_end = surface->height;
         qatomic_set(&surface->download_pending, true);
         qatomic_set(&d->pgraph.vk_renderer_state->downloads_pending, true);
         pfifo_kick(d);
@@ -560,6 +628,7 @@ static void surface_access_callback(void *opaque, MemoryRegion *mr, hwaddr addr,
 
         if (surface->draw_dirty) {
             surface->download_pending = true;
+            surface_queue_download_range(surface, offset, len);
             wait_for_downloads = true;
         }
 

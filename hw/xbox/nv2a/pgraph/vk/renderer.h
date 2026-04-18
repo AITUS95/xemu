@@ -129,6 +129,8 @@ typedef struct SurfaceBinding {
     bool draw_dirty;
     bool download_pending;
     bool upload_pending;
+    uint32_t download_row_start;
+    uint32_t download_row_end;
 
     BasicSurfaceFormatInfo fmt;
     SurfaceFormatInfo host_fmt;
