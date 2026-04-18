@@ -606,40 +606,40 @@ void pgraph_vk_download_dirty_surfaces(NV2AState *d)
 static void surface_access_callback(void *opaque, MemoryRegion *mr, hwaddr addr,
                                     hwaddr len, bool write)
 {
-    NV2AState *d = (NV2AState *)opaque;
-    qemu_mutex_lock(&d->pgraph.lock);
-
-    PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+    SurfaceBinding *surface = (SurfaceBinding *)opaque;
+    NV2AState *d = g_nv2a;
+    hwaddr offset = addr - surface->vram_addr;
     bool wait_for_downloads = false;
 
-    SurfaceBinding *surface;
-    QTAILQ_FOREACH(surface, &r->surfaces, entry) {
-        if (!check_surface_overlaps_range(surface, addr, len)) {
-            continue;
-        }
+    if (write) {
+        trace_nv2a_pgraph_surface_cpu_write(surface->vram_addr, offset);
+    } else {
+        trace_nv2a_pgraph_surface_cpu_read(surface->vram_addr, offset);
+    }
 
-        hwaddr offset = addr - surface->vram_addr;
-
+    if (!qatomic_read(&surface->draw_dirty)) {
         if (write) {
-            trace_nv2a_pgraph_surface_cpu_write(surface->vram_addr, offset);
-        } else {
-            trace_nv2a_pgraph_surface_cpu_read(surface->vram_addr, offset);
+            qatomic_set(&surface->upload_pending, true);
         }
+        return;
+    }
 
-        if (surface->draw_dirty) {
-            surface->download_pending = true;
-            surface_queue_download_range(surface, offset, len);
-            wait_for_downloads = true;
-        }
+    qemu_mutex_lock(&d->pgraph.lock);
 
-        if (write) {
-            surface->upload_pending = true;
-        }
+    if (surface->draw_dirty) {
+        wait_for_downloads = !qatomic_read(&surface->download_pending);
+        qatomic_set(&surface->download_pending, true);
+        surface_queue_download_range(surface, offset, len);
+    }
+
+    if (write) {
+        qatomic_set(&surface->upload_pending, true);
     }
 
     qemu_mutex_unlock(&d->pgraph.lock);
 
     if (wait_for_downloads) {
+        PGRAPHVkState *r = d->pgraph.vk_renderer_state;
         qemu_mutex_lock(&d->pfifo.lock);
         qemu_event_reset(&r->downloads_complete);
         qatomic_set(&r->downloads_pending, true);
@@ -655,7 +655,7 @@ static void register_cpu_access_callback(NV2AState *d, SurfaceBinding *surface)
         if (surface->width && surface->height) {
             surface->access_cb = mem_access_callback_insert(
                 qemu_get_cpu(0), d->vram, surface->vram_addr, surface->size,
-                &surface_access_callback, d);
+                &surface_access_callback, surface);
         } else {
             surface->access_cb = NULL;
         }
@@ -1029,7 +1029,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    if (!(surface->upload_pending || force)) {
+    if (!(qatomic_read(&surface->upload_pending) || force)) {
         return;
     }
 
@@ -1043,7 +1043,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
                  surface->width, surface->height, surface->pitch,
                  surface->fmt.bytes_per_pixel);
 
-    surface->upload_pending = false;
+    qatomic_set(&surface->upload_pending, false);
     surface->draw_time = pg->draw_time;
 
     if (!surface->width || !surface->height) {
