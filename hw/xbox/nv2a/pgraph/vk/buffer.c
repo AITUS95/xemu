@@ -22,6 +22,7 @@
 static void create_buffer(PGRAPHState *pg, StorageBuffer *buffer)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    VmaAllocationInfo alloc_info = { 0 };
 
     VkBufferCreateInfo buffer_create_info = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -31,7 +32,10 @@ static void create_buffer(PGRAPHState *pg, StorageBuffer *buffer)
     };
     VK_CHECK(vmaCreateBuffer(r->allocator, &buffer_create_info,
                              &buffer->alloc_info, &buffer->buffer,
-                             &buffer->allocation, NULL));
+                             &buffer->allocation, &alloc_info));
+    buffer->mapped = alloc_info.pMappedData;
+    vmaGetAllocationMemoryProperties(r->allocator, buffer->allocation,
+                                     &buffer->properties);
 }
 
 static void destroy_buffer(PGRAPHState *pg, StorageBuffer *buffer)
@@ -55,6 +59,15 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                  VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
     };
+    VmaAllocationCreateInfo host_readback_alloc_create_info = {
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        .preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+    };
     VmaAllocationCreateInfo host_seq_write_alloc_create_info = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -66,7 +79,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_STAGING_DST] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_readback_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .buffer_size = 4096 * 4096 * 4,
     };
@@ -166,7 +179,9 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     for (int i = 0; i < BUFFER_COUNT; i++) {
-        if (r->storage_buffers[i].mapped) {
+        if (r->storage_buffers[i].mapped &&
+            !(r->storage_buffers[i].alloc_info.flags &
+              VMA_ALLOCATION_CREATE_MAPPED_BIT)) {
             vmaUnmapMemory(r->allocator, r->storage_buffers[i].allocation);
         }
         destroy_buffer(pg, &r->storage_buffers[i]);
