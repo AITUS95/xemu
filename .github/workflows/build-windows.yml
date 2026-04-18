@@ -123,3 +123,89 @@ jobs:
         name: xemu-windows-${{ matrix.arch }}-${{ matrix.configuration }}-pdb
         path: dist-pdb
         compression-level: 0
+
+  # Generate a release-like Windows package that keeps profiler-friendly codegen
+  # and debug info. This is separate from the shipping release package so the
+  # normal Windows build can keep LTO and smaller artifacts.
+  build_profile:
+    name: Build profiling package for Windows (x86_64)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/xemu-project/xemu-win64-toolchain-gcc:sha-18018f1
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: /tmp/xemu-ccache
+      CCACHE_MAXSIZE: 512M
+      CROSSPREFIX: x86_64-w64-mingw32.static-
+      CROSSAR: x86_64-w64-mingw32.static-gcc-ar
+    steps:
+    - name: Download source package
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+      with:
+        name: src
+    - name: Extract source package
+      run: tar -xf xemu-${{ inputs.pkg_version }}.tar.zst --strip-components=2
+    - name: Initialize compiler cache
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v4
+      with:
+        path: ${{ env.CCACHE_DIR }}
+        key: cache-wincross-${{ runner.os }}-x86_64-profile-${{ github.sha }}
+        restore-keys: cache-wincross-${{ runner.os }}-x86_64-profile-
+    - name: Setup ccache
+      run: |
+        mkdir -p ${CCACHE_DIR}
+        ccache -z
+    - name: Compile profiling build
+      run: >
+        ./build.sh -p win64-cross
+        --enable-debug-info
+        --disable-lto
+        --disable-strip
+        --extra-cflags="-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls"
+        --extra-ldflags="-Wl,--build-id=sha1"
+    - name: Report ccache stats
+      run: ccache -s
+    - name: Upload build artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+      with:
+        name: xemu-windows-x86_64-profile-raw
+        path: dist
+
+  generate_profile_pdb:
+    name: Generate profiling package for Windows (x86_64)
+    runs-on: windows-latest
+    needs: build_profile
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+      with:
+        name: xemu-windows-x86_64-profile-raw
+        path: dist
+    - name: Generate PDB
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/rainers/cv2pdb/releases/download/v0.52/cv2pdb-0.52.zip" -OutFile "cv2pdb.zip"
+        7z x -ocv2pdb -y cv2pdb.zip
+        cd dist
+        ../cv2pdb/cv2pdb64.exe xemu.exe
+    - name: Determine package version
+      id: package_id
+      shell: bash
+      env:
+        VERSION: ${{ inputs.pkg_version }}
+      run: |
+        echo "pkg_filename=xemu-${VERSION}-windows-x86_64-profile.zip" >> $GITHUB_OUTPUT
+        echo "pdb_filename=xemu-${VERSION}-windows-x86_64-profile-pdb.zip" >> $GITHUB_OUTPUT
+    - name: Package
+      run: |
+        mkdir dist-profile
+        cd dist
+        7z a -tzip ../dist-profile/${{ steps.package_id.outputs.pkg_filename}} *
+        7z a -tzip ../dist-profile/${{ steps.package_id.outputs.pdb_filename}} "-ir!*.pdb"
+    - name: Upload build artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+      with:
+        name: xemu-windows-x86_64-profile
+        path: dist-profile
+        compression-level: 0
