@@ -76,6 +76,14 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
  * for this hot-path reader state instead.
  */
 static DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
+static PVOID (WINAPI *rcu_tls_get_value)(DWORD);
+
+static inline struct rcu_reader_data *rcu_tls_get_reader(void)
+{
+    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
+    return rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
+                               TlsGetValue(rcu_reader_tls_idx);
+}
 
 static struct rcu_reader_data *rcu_reader_new(void)
 {
@@ -89,9 +97,7 @@ static struct rcu_reader_data *get_or_create_ptr_rcu_reader(void)
 {
     struct rcu_reader_data *reader;
 
-    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
-
-    reader = TlsGetValue(rcu_reader_tls_idx);
+    reader = rcu_tls_get_reader();
     if (!reader) {
         reader = rcu_reader_new();
         if (!TlsSetValue(rcu_reader_tls_idx, reader)) {
@@ -494,6 +500,9 @@ static void rcu_init_complete(void)
 #ifdef _WIN32
     rcu_reader_tls_idx = TlsAlloc();
     assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
+    rcu_tls_get_value =
+        (PVOID (WINAPI *)(DWORD))GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                "TlsGetValue2");
 #endif
 
     /* The caller is assumed to have BQL, so the call_rcu thread
