@@ -77,12 +77,19 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
  */
 static DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
 static PVOID (WINAPI *rcu_tls_get_value)(DWORD);
+static __thread struct rcu_reader_data *rcu_reader_current;
 
 static inline struct rcu_reader_data *rcu_tls_get_reader(void)
 {
+    if (likely(rcu_reader_current != NULL)) {
+        return rcu_reader_current;
+    }
+
     assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
-    return rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
-                               TlsGetValue(rcu_reader_tls_idx);
+    rcu_reader_current = rcu_tls_get_value ?
+        rcu_tls_get_value(rcu_reader_tls_idx) :
+        TlsGetValue(rcu_reader_tls_idx);
+    return rcu_reader_current;
 }
 
 static struct rcu_reader_data *rcu_reader_new(void)
@@ -104,6 +111,7 @@ static struct rcu_reader_data *get_or_create_ptr_rcu_reader(void)
             g_free(reader);
             abort();
         }
+        rcu_reader_current = reader;
     }
 
     return reader;
@@ -469,6 +477,7 @@ void rcu_unregister_thread(void)
     if (!TlsSetValue(rcu_reader_tls_idx, NULL)) {
         abort();
     }
+    rcu_reader_current = NULL;
     g_free(reader);
 #endif
 }
