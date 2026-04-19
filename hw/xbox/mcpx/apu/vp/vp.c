@@ -109,6 +109,13 @@ static uint32_t voice_get_mask(MCPXAPUState *d, uint16_t voice_handle,
            ctz32(mask);
 }
 
+static uint32_t voice_read_reg(MCPXAPUState *d, uint16_t voice_handle,
+                               hwaddr offset)
+{
+    hwaddr voice = d->regs[NV_PAPU_VPVADDR] + voice_handle * NV_PAVS_SIZE;
+    return ldl_le_phys(&address_space_memory, voice + offset);
+}
+
 static void voice_set_mask(MCPXAPUState *d, uint16_t voice_handle,
                            hwaddr offset, uint32_t mask, uint32_t val)
 {
@@ -840,39 +847,36 @@ static float voice_step_envelope(MCPXAPUState *d, uint16_t v, uint32_t reg_0,
 static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                        int num_samples_requested)
 {
+    uint32_t cfg_fmt = voice_read_reg(d, v, NV_PAVS_VOICE_CFG_FMT);
+    uint32_t par_state = voice_read_reg(d, v, NV_PAVS_VOICE_PAR_STATE);
+    uint32_t par_next = voice_read_reg(d, v, NV_PAVS_VOICE_PAR_NEXT);
+    uint32_t par_offset = voice_read_reg(d, v, NV_PAVS_VOICE_PAR_OFFSET);
+    uint32_t cur_psh_sample =
+        voice_read_reg(d, v, NV_PAVS_VOICE_CUR_PSH_SAMPLE);
+    uint32_t cur_psl_start =
+        voice_read_reg(d, v, NV_PAVS_VOICE_CUR_PSL_START);
+
     assert(v < MCPX_HW_MAX_VOICES);
-    bool stereo = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                 NV_PAVS_VOICE_CFG_FMT_STEREO);
+    bool stereo = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_STEREO);
     unsigned int channels = stereo ? 2 : 1;
-    unsigned int sample_size = voice_get_mask(
-        d, v, NV_PAVS_VOICE_CFG_FMT, NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE);
+    unsigned int sample_size =
+        GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_SAMPLE_SIZE);
     unsigned int container_sizes[4] = { 1, 2, 0, 4 }; /* B8, B16, ADPCM, B32 */
-    unsigned int container_size_index = voice_get_mask(
-        d, v, NV_PAVS_VOICE_CFG_FMT, NV_PAVS_VOICE_CFG_FMT_CONTAINER_SIZE);
+    unsigned int container_size_index =
+        GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_CONTAINER_SIZE);
     unsigned int container_size = container_sizes[container_size_index];
-    bool stream = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                 NV_PAVS_VOICE_CFG_FMT_DATA_TYPE);
-    bool paused = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                 NV_PAVS_VOICE_PAR_STATE_PAUSED);
-    bool loop =
-        voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT, NV_PAVS_VOICE_CFG_FMT_LOOP);
-    uint32_t ebo = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_NEXT,
-                                  NV_PAVS_VOICE_PAR_NEXT_EBO);
-    uint32_t cbo = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_OFFSET,
-                                  NV_PAVS_VOICE_PAR_OFFSET_CBO);
-    uint32_t lbo = voice_get_mask(d, v, NV_PAVS_VOICE_CUR_PSH_SAMPLE,
-                                  NV_PAVS_VOICE_CUR_PSH_SAMPLE_LBO);
-    uint32_t ba = voice_get_mask(d, v, NV_PAVS_VOICE_CUR_PSL_START,
-                                 NV_PAVS_VOICE_CUR_PSL_START_BA);
+    bool stream = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_DATA_TYPE);
+    bool paused = GET_MASK(par_state, NV_PAVS_VOICE_PAR_STATE_PAUSED);
+    bool loop = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_LOOP);
+    uint32_t ebo = GET_MASK(par_next, NV_PAVS_VOICE_PAR_NEXT_EBO);
+    uint32_t cbo = GET_MASK(par_offset, NV_PAVS_VOICE_PAR_OFFSET_CBO);
+    uint32_t lbo = GET_MASK(cur_psh_sample, NV_PAVS_VOICE_CUR_PSH_SAMPLE_LBO);
+    uint32_t ba = GET_MASK(cur_psl_start, NV_PAVS_VOICE_CUR_PSL_START_BA);
     unsigned int samples_per_block =
-        1 + voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                           NV_PAVS_VOICE_CFG_FMT_SAMPLES_PER_BLOCK);
-    bool persist = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                  NV_PAVS_VOICE_CFG_FMT_PERSIST);
-    bool multipass = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                    NV_PAVS_VOICE_CFG_FMT_MULTIPASS);
-    bool linked = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                 NV_PAVS_VOICE_CFG_FMT_LINKED); /* FIXME? */
+        1 + GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_SAMPLES_PER_BLOCK);
+    bool persist = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_PERSIST);
+    bool multipass = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_MULTIPASS);
+    bool linked = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_LINKED); /* FIXME? */
 
     assert(!multipass); // Multipass is handled before this
 
@@ -921,8 +925,7 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
         if (!persist) {
             // FIXME: Confirm. Unsure if this should wait until end of SSL or
             // terminate immediately. Definitely not before end of envelope.
-            int eacur = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                       NV_PAVS_VOICE_PAR_STATE_EACUR);
+            int eacur = GET_MASK(par_state, NV_PAVS_VOICE_PAR_STATE_EACUR);
             if (eacur < NV_PAVS_VOICE_PAR_STATE_EFCUR_RELEASE) {
                 DPRINTF("Voice %d envelope not in release state (%d) and "
                         "persist is not set. Ending stream now!\n",
@@ -1302,12 +1305,15 @@ static void voice_process(MCPXAPUState *d,
                           float sample_buf[NUM_SAMPLES_PER_FRAME][2],
                           uint16_t v, int voice_list)
 {
+    uint32_t cfg_fmt = voice_read_reg(d, v, NV_PAVS_VOICE_CFG_FMT);
+    uint32_t par_state = voice_read_reg(d, v, NV_PAVS_VOICE_PAR_STATE);
+    uint32_t tar_pitch_link =
+        voice_read_reg(d, v, NV_PAVS_VOICE_TAR_PITCH_LINK);
+    uint32_t cfg_env0 = voice_read_reg(d, v, NV_PAVS_VOICE_CFG_ENV0);
     assert(v < MCPX_HW_MAX_VOICES);
-    bool stereo = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                 NV_PAVS_VOICE_CFG_FMT_STEREO);
+    bool stereo = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_STEREO);
     unsigned int channels = stereo ? 2 : 1;
-    bool paused = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                 NV_PAVS_VOICE_PAR_STATE_PAUSED);
+    bool paused = GET_MASK(par_state, NV_PAVS_VOICE_PAR_STATE_PAUSED);
 
     struct McpxApuDebugVoice *dbg = &g_dbg.vp.v[v];
     dbg->active = true;
@@ -1325,10 +1331,8 @@ static void voice_process(MCPXAPUState *d,
         NV_PAVS_VOICE_CUR_ECNT_EFCOUNT, NV_PAVS_VOICE_PAR_STATE_EFCUR);
     assert(ef_value >= 0.0f);
     assert(ef_value <= 1.0f);
-    int16_t p = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_PITCH_LINK,
-                               NV_PAVS_VOICE_TAR_PITCH_LINK_PITCH);
-    int8_t ps = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_ENV0,
-                               NV_PAVS_VOICE_CFG_ENV0_EF_PITCHSCALE);
+    int16_t p = GET_MASK(tar_pitch_link, NV_PAVS_VOICE_TAR_PITCH_LINK_PITCH);
+    int8_t ps = GET_MASK(cfg_env0, NV_PAVS_VOICE_CFG_ENV0_EF_PITCHSCALE);
     float rate = 1.0 / powf(2.0f, (p + ps * 32 * ef_value) / 4096.0f);
     dbg->rate = rate;
 
@@ -1342,8 +1346,7 @@ static void voice_process(MCPXAPUState *d,
 
     float samples[NUM_SAMPLES_PER_FRAME][2] = { 0 };
 
-    bool multipass = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                                    NV_PAVS_VOICE_CFG_FMT_MULTIPASS);
+    bool multipass = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_MULTIPASS);
     dbg->multipass = multipass;
 
     if (multipass) {
@@ -1365,29 +1368,26 @@ static void voice_process(MCPXAPUState *d,
         }
     }
 
-    int active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
+    par_state = voice_read_reg(d, v, NV_PAVS_VOICE_PAR_STATE);
+    int active = GET_MASK(par_state, NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
     if (!active) {
         return;
     }
 
+    uint32_t cfg_vbin = voice_read_reg(d, v, NV_PAVS_VOICE_CFG_VBIN);
+    uint32_t tar_vola = voice_read_reg(d, v, NV_PAVS_VOICE_TAR_VOLA);
+    uint32_t tar_volb = voice_read_reg(d, v, NV_PAVS_VOICE_TAR_VOLB);
+    uint32_t tar_volc = voice_read_reg(d, v, NV_PAVS_VOICE_TAR_VOLC);
+
     int bin[8];
-    bin[0] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V0BIN);
-    bin[1] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V1BIN);
-    bin[2] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V2BIN);
-    bin[3] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V3BIN);
-    bin[4] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V4BIN);
-    bin[5] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_VBIN,
-                            NV_PAVS_VOICE_CFG_VBIN_V5BIN);
-    bin[6] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                            NV_PAVS_VOICE_CFG_FMT_V6BIN);
-    bin[7] = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_FMT,
-                            NV_PAVS_VOICE_CFG_FMT_V7BIN);
+    bin[0] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V0BIN);
+    bin[1] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V1BIN);
+    bin[2] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V2BIN);
+    bin[3] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V3BIN);
+    bin[4] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V4BIN);
+    bin[5] = GET_MASK(cfg_vbin, NV_PAVS_VOICE_CFG_VBIN_V5BIN);
+    bin[6] = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_V6BIN);
+    bin[7] = GET_MASK(cfg_fmt, NV_PAVS_VOICE_CFG_FMT_V7BIN);
 
     if (v < MCPX_HW_MAX_3D_VOICES) {
         bin[0] = d->vp.hrtf_submix[0];
@@ -1397,31 +1397,19 @@ static void voice_process(MCPXAPUState *d,
     }
 
     uint16_t vol[8];
-    vol[0] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLA,
-                            NV_PAVS_VOICE_TAR_VOLA_VOLUME0);
-    vol[1] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLA,
-                            NV_PAVS_VOICE_TAR_VOLA_VOLUME1);
-    vol[2] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLB,
-                            NV_PAVS_VOICE_TAR_VOLB_VOLUME2);
-    vol[3] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLB,
-                            NV_PAVS_VOICE_TAR_VOLB_VOLUME3);
-    vol[4] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLC,
-                            NV_PAVS_VOICE_TAR_VOLC_VOLUME4);
-    vol[5] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLC,
-                            NV_PAVS_VOICE_TAR_VOLC_VOLUME5);
+    vol[0] = GET_MASK(tar_vola, NV_PAVS_VOICE_TAR_VOLA_VOLUME0);
+    vol[1] = GET_MASK(tar_vola, NV_PAVS_VOICE_TAR_VOLA_VOLUME1);
+    vol[2] = GET_MASK(tar_volb, NV_PAVS_VOICE_TAR_VOLB_VOLUME2);
+    vol[3] = GET_MASK(tar_volb, NV_PAVS_VOICE_TAR_VOLB_VOLUME3);
+    vol[4] = GET_MASK(tar_volc, NV_PAVS_VOICE_TAR_VOLC_VOLUME4);
+    vol[5] = GET_MASK(tar_volc, NV_PAVS_VOICE_TAR_VOLC_VOLUME5);
 
-    vol[6] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLC,
-                            NV_PAVS_VOICE_TAR_VOLC_VOLUME6_B11_8) << 8;
-    vol[6] |= voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLB,
-                             NV_PAVS_VOICE_TAR_VOLB_VOLUME6_B7_4) << 4;
-    vol[6] |= voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLA,
-                             NV_PAVS_VOICE_TAR_VOLA_VOLUME6_B3_0);
-    vol[7] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLC,
-                            NV_PAVS_VOICE_TAR_VOLC_VOLUME7_B11_8) << 8;
-    vol[7] |= voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLB,
-                             NV_PAVS_VOICE_TAR_VOLB_VOLUME7_B7_4) << 4;
-    vol[7] |= voice_get_mask(d, v, NV_PAVS_VOICE_TAR_VOLA,
-                             NV_PAVS_VOICE_TAR_VOLA_VOLUME7_B3_0);
+    vol[6] = GET_MASK(tar_volc, NV_PAVS_VOICE_TAR_VOLC_VOLUME6_B11_8) << 8;
+    vol[6] |= GET_MASK(tar_volb, NV_PAVS_VOICE_TAR_VOLB_VOLUME6_B7_4) << 4;
+    vol[6] |= GET_MASK(tar_vola, NV_PAVS_VOICE_TAR_VOLA_VOLUME6_B3_0);
+    vol[7] = GET_MASK(tar_volc, NV_PAVS_VOICE_TAR_VOLC_VOLUME7_B11_8) << 8;
+    vol[7] |= GET_MASK(tar_volb, NV_PAVS_VOICE_TAR_VOLB_VOLUME7_B7_4) << 4;
+    vol[7] |= GET_MASK(tar_vola, NV_PAVS_VOICE_TAR_VOLA_VOLUME7_B3_0);
 
     // FIXME: If phase negations means to flip the signal upside down
     //        we should modify volume of bin6 and bin7 here.
@@ -1435,8 +1423,8 @@ static void voice_process(MCPXAPUState *d,
         return;
     }
 
-    int fmode = voice_get_mask(d, v, NV_PAVS_VOICE_CFG_MISC,
-                               NV_PAVS_VOICE_CFG_MISC_FMODE);
+    uint32_t cfg_misc = voice_read_reg(d, v, NV_PAVS_VOICE_CFG_MISC);
+    int fmode = GET_MASK(cfg_misc, NV_PAVS_VOICE_CFG_MISC_FMODE);
 
     // FIXME: Move to function
     bool lpf = false;
@@ -1449,14 +1437,12 @@ static void voice_process(MCPXAPUState *d,
     }
     if (lpf) {
         for (int ch = 0; ch < 2; ch++) {
+            uint32_t tar_fca = voice_read_reg(
+                d, v, NV_PAVS_VOICE_TAR_FCA + (ch % channels) * 4);
             // FIXME: Cutoff modulation via NV_PAVS_VOICE_CFG_ENV1_EF_FCSCALE
-            int16_t fc = voice_get_mask(
-                d, v, NV_PAVS_VOICE_TAR_FCA + (ch % channels) * 4,
-                NV_PAVS_VOICE_TAR_FCA_FC0);
+            int16_t fc = GET_MASK(tar_fca, NV_PAVS_VOICE_TAR_FCA_FC0);
             float fc_f = clampf(pow(2, fc / 4096.0), 0.003906f, 1.0f);
-            uint16_t q = voice_get_mask(
-                d, v, NV_PAVS_VOICE_TAR_FCA + (ch % channels) * 4,
-                NV_PAVS_VOICE_TAR_FCA_FC1);
+            uint16_t q = GET_MASK(tar_fca, NV_PAVS_VOICE_TAR_FCA_FC1);
             float q_f = clampf(q / (1.0 * 0x8000), 0.079407f, 1.0f);
             sv_filter *filter = &d->vp.filters[v].svf[ch];
             setup_svf(filter, fc_f, q_f, F_LP);
@@ -1468,9 +1454,10 @@ static void voice_process(MCPXAPUState *d,
     }
 
     if (v < MCPX_HW_MAX_3D_VOICES && g_config.audio.hrtf) {
+        uint32_t cfg_hrtf_target =
+            voice_read_reg(d, v, NV_PAVS_VOICE_CFG_HRTF_TARGET);
         uint16_t hrtf_handle =
-            voice_get_mask(d, v, NV_PAVS_VOICE_CFG_HRTF_TARGET,
-                           NV_PAVS_VOICE_CFG_HRTF_TARGET_HANDLE);
+            GET_MASK(cfg_hrtf_target, NV_PAVS_VOICE_CFG_HRTF_TARGET_HANDLE);
         if (hrtf_handle != HRTF_NULL_HANDLE) {
             hrtf_filter_process(&d->vp.filters[v].hrtf, samples, samples);
         }
