@@ -361,7 +361,6 @@ typedef struct PGRAPHVkState {
     VkCommandBuffer command_buffers[2];
 
     VkCommandBuffer command_buffer;
-    VkSemaphore command_buffer_semaphore;
     VkFence command_buffer_fence;
     unsigned int command_buffer_start_time;
     bool in_command_buffer;
