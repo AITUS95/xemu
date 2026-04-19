@@ -481,7 +481,6 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                                  TextureBinding *binding)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-    StorageBuffer *staging_src = &r->storage_buffers[BUFFER_STAGING_SRC];
     TextureShape *state = &binding->key.state;
     VkColorFormatInfo vkf = kelvin_color_format_vk_map[state->color_format];
 
@@ -504,8 +503,12 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     assert(texture_data_size <=
            r->storage_buffers[BUFFER_STAGING_SRC].buffer_size);
 
-    // Copy texture data to the persistently mapped staging buffer.
-    assert(staging_src->mapped);
+    // Copy texture data to mapped device buffer
+    uint8_t *mapped_memory_ptr;
+
+    VK_CHECK(vmaMapMemory(r->allocator,
+                          r->storage_buffers[BUFFER_STAGING_SRC].allocation,
+                          (void *)&mapped_memory_ptr));
 
     int num_regions = num_layers * state->levels;
     g_autofree VkBufferImageCopy *regions =
@@ -522,7 +525,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
             NV2A_VK_DPRINTF(" - Level %d, w=%d h=%d d=%d @ %08" HWADDR_PRIx,
                             level_idx, level->width, level->height,
                             level->depth, buffer_offset);
-            memcpy(staging_src->mapped + buffer_offset, level->decoded_data,
+            memcpy(mapped_memory_ptr + buffer_offset, level->decoded_data,
                    level->decoded_size);
             *region = (VkBufferImageCopy){
                 .bufferOffset = buffer_offset,
@@ -540,16 +543,14 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
             region++;
         }
     }
-    assert(buffer_offset <= staging_src->buffer_size);
+    assert(buffer_offset <= r->storage_buffers[BUFFER_STAGING_SRC].buffer_size);
 
-    if (!(staging_src->properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-        VkDeviceSize atom_size = MAX((VkDeviceSize)1,
-                                     r->device_props.limits.nonCoherentAtomSize);
-        VkDeviceSize flush_size = MIN(QEMU_ALIGN_UP(buffer_offset, atom_size),
-                                      staging_src->buffer_size);
-        VK_CHECK(vmaFlushAllocation(r->allocator, staging_src->allocation, 0,
-                                    flush_size));
-    }
+    vmaFlushAllocation(r->allocator,
+                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
+                       VK_WHOLE_SIZE);
+
+    vmaUnmapMemory(r->allocator,
+                   r->storage_buffers[BUFFER_STAGING_SRC].allocation);
 
     // FIXME: Use nondraw. Need to fill and copy tex buffer at once
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
@@ -561,8 +562,8 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
         .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .buffer = staging_src->buffer,
-        .size = buffer_offset,
+        .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
+        .size = VK_WHOLE_SIZE
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -573,7 +574,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     binding->current_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    vkCmdCopyBufferToImage(cmd, staging_src->buffer,
+    vkCmdCopyBufferToImage(cmd, r->storage_buffers[BUFFER_STAGING_SRC].buffer,
                            binding->image, binding->current_layout,
                            num_regions, regions);
 
@@ -979,21 +980,22 @@ static void create_dummy_texture(PGRAPHState *pg)
     VK_CHECK(vkCreateSampler(r->device, &sampler_create_info, NULL,
                              &texture_sampler));
 
-    StorageBuffer *staging_src = &r->storage_buffers[BUFFER_STAGING_SRC];
+    // Copy texture data to mapped device buffer
+    uint8_t *mapped_memory_ptr;
     size_t texture_data_size =
         image_create_info.extent.width * image_create_info.extent.height;
 
-    assert(staging_src->mapped);
-    memset(staging_src->mapped, 0xff, texture_data_size);
+    VK_CHECK(vmaMapMemory(r->allocator,
+                          r->storage_buffers[BUFFER_STAGING_SRC].allocation,
+                          (void *)&mapped_memory_ptr));
+    memset(mapped_memory_ptr, 0xff, texture_data_size);
 
-    if (!(staging_src->properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-        VkDeviceSize atom_size = MAX((VkDeviceSize)1,
-                                     r->device_props.limits.nonCoherentAtomSize);
-        VkDeviceSize flush_size = MIN(QEMU_ALIGN_UP(texture_data_size, atom_size),
-                                      staging_src->buffer_size);
-        VK_CHECK(vmaFlushAllocation(r->allocator, staging_src->allocation, 0,
-                                    flush_size));
-    }
+    vmaFlushAllocation(r->allocator,
+                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
+                       VK_WHOLE_SIZE);
+
+    vmaUnmapMemory(r->allocator,
+                   r->storage_buffers[BUFFER_STAGING_SRC].allocation);
 
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_GREEN, __func__);
@@ -1014,7 +1016,7 @@ static void create_dummy_texture(PGRAPHState *pg)
         .imageExtent = (VkExtent3D){ image_create_info.extent.width,
                                      image_create_info.extent.height, 1 },
     };
-    vkCmdCopyBufferToImage(cmd, staging_src->buffer,
+    vkCmdCopyBufferToImage(cmd, r->storage_buffers[BUFFER_STAGING_SRC].buffer,
                            texture_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            1, &region);
 

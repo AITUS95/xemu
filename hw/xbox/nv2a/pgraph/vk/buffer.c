@@ -71,7 +71,6 @@ void pgraph_vk_init_buffers(NV2AState *d)
     VmaAllocationCreateInfo host_seq_write_alloc_create_info = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
                  VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
     };
     VmaAllocationCreateInfo device_alloc_create_info = {
