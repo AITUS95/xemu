@@ -27,6 +27,9 @@ typedef struct CPUJumpCache {
     struct {
         TranslationBlock *tb;
         vaddr pc;
+        uint64_t cs_base;
+        uint32_t flags;
+        uint32_t cflags;
     } array[TB_JMP_CACHE_SIZE];
 } CPUJumpCache;
 
