@@ -1107,6 +1107,7 @@ static void address_space_set_flatview(AddressSpace *as)
     }
 
     /* Writes are protected by the BQL.  */
+    qatomic_rcu_set(&as->dispatch, new_view->dispatch);
     qatomic_rcu_set(&as->current_map, new_view);
     if (old_view) {
         flatview_unref(old_view);
@@ -3313,6 +3314,7 @@ void address_space_init(AddressSpace *as, MemoryRegion *root, const char *name)
     memory_region_ref(root);
     as->root = root;
     as->current_map = NULL;
+    as->dispatch = NULL;
     as->ioeventfd_nb = 0;
     as->ioeventfds = NULL;
     QTAILQ_INIT(&as->listeners);

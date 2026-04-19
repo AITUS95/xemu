@@ -22,7 +22,7 @@ static inline AddressSpaceDispatch *flatview_to_dispatch(FlatView *fv)
 
 static inline AddressSpaceDispatch *address_space_to_dispatch(AddressSpace *as)
 {
-    return flatview_to_dispatch(address_space_to_flatview(as));
+    return qatomic_rcu_read((void **)&as->dispatch);
 }
 
 FlatView *address_space_get_flatview(AddressSpace *as);

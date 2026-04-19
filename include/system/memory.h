@@ -1165,6 +1165,7 @@ struct AddressSpace {
 
     /* Accessed via RCU.  */
     struct FlatView *current_map;
+    void *dispatch;
 
     int ioeventfd_nb;
     int ioeventfd_notifiers;
