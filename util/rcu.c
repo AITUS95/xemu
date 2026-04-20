@@ -75,8 +75,8 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
  * get_ptr_rcu_reader() -> _emutls_get_address(). Use the native Win32 TLS API
  * for this hot-path reader state instead.
  */
-static DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
-static PVOID (WINAPI *rcu_tls_get_value)(DWORD);
+DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
+PVOID (WINAPI *rcu_tls_get_value)(DWORD);
 
 static inline struct rcu_reader_data *rcu_tls_get_reader(void)
 {
@@ -119,7 +119,7 @@ void set_rcu_reader(struct rcu_reader_data v)
     *get_ptr_rcu_reader() = v;
 }
 
-struct rcu_reader_data *get_ptr_rcu_reader(void)
+struct rcu_reader_data *get_ptr_rcu_reader_slow(void)
 {
     struct rcu_reader_data *reader = rcu_tls_get_reader();
 

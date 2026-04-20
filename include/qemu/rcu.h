@@ -73,7 +73,30 @@ struct rcu_reader_data {
     NotifierList force_rcu;
 };
 
+#ifdef _WIN32
+extern DWORD rcu_reader_tls_idx;
+extern PVOID (WINAPI *rcu_tls_get_value)(DWORD);
+
+struct rcu_reader_data get_rcu_reader(void);
+void set_rcu_reader(struct rcu_reader_data v);
+struct rcu_reader_data *get_ptr_rcu_reader_slow(void);
+
+static inline struct rcu_reader_data *get_ptr_rcu_reader(void)
+{
+    struct rcu_reader_data *reader;
+
+    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
+    reader = rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
+                                 TlsGetValue(rcu_reader_tls_idx);
+    if (likely(reader)) {
+        return reader;
+    }
+
+    return get_ptr_rcu_reader_slow();
+}
+#else
 QEMU_DECLARE_CO_TLS(struct rcu_reader_data, rcu_reader)
+#endif
 
 static inline void rcu_read_lock(void)
 {
