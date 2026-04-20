@@ -111,16 +111,22 @@ static struct rcu_reader_data *get_or_create_ptr_rcu_reader(void)
 
 struct rcu_reader_data get_rcu_reader(void)
 {
-    return *get_or_create_ptr_rcu_reader();
+    return *get_ptr_rcu_reader();
 }
 
 void set_rcu_reader(struct rcu_reader_data v)
 {
-    *get_or_create_ptr_rcu_reader() = v;
+    *get_ptr_rcu_reader() = v;
 }
 
 struct rcu_reader_data *get_ptr_rcu_reader(void)
 {
+    struct rcu_reader_data *reader = rcu_tls_get_reader();
+
+    if (likely(reader)) {
+        return reader;
+    }
+
     return get_or_create_ptr_rcu_reader();
 }
 #else
