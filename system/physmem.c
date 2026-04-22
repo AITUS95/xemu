@@ -309,16 +309,43 @@ void address_space_dispatch_compact(AddressSpaceDispatch *d)
     }
 }
 
-static inline bool section_covers_addr(const MemoryRegionSection *section,
-                                       hwaddr addr)
+static inline __attribute__((always_inline))
+bool section_covers_addr(const MemoryRegionSection *section, hwaddr addr)
 {
     Int128 size = section->size;
+    uint64_t size_lo = int128_getlo(size);
 
     /* Memory topology clips a memory region to [0, 2^64); size.hi > 0 means
      * the section must cover the entire address space.
      */
-    return int128_gethi(size) ||
-           addr - section->offset_within_address_space < int128_getlo(size);
+    return unlikely(int128_gethi(size)) ||
+           addr - section->offset_within_address_space < size_lo;
+}
+
+static inline __attribute__((always_inline))
+hwaddr section_addr_within_region(const MemoryRegionSection *section, hwaddr addr)
+{
+    return addr - section->offset_within_address_space;
+}
+
+static inline __attribute__((always_inline))
+void section_clamp_ram_plen(const MemoryRegionSection *section,
+                            hwaddr section_addr,
+                            hwaddr *plen)
+{
+    Int128 size = section->size;
+
+    if (likely(!int128_gethi(size))) {
+        hwaddr section_len = int128_getlo(size) - section_addr;
+
+        if (*plen > section_len) {
+            *plen = section_len;
+        }
+    } else {
+        Int128 diff = int128_sub(size, int128_make64(section_addr));
+
+        *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
+    }
 }
 
 static MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr addr)
@@ -345,19 +372,21 @@ static MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr addr)
 }
 
 /* Called from RCU critical section */
-static MemoryRegionSection *address_space_lookup_region(AddressSpaceDispatch *d,
-                                                        hwaddr addr,
-                                                        bool resolve_subpage)
+static inline __attribute__((always_inline))
+MemoryRegionSection *address_space_lookup_region(AddressSpaceDispatch *d,
+                                                 hwaddr addr,
+                                                 bool resolve_subpage)
 {
     MemoryRegionSection *section = qatomic_read(&d->mru_section);
+    MemoryRegionSection *unassigned = &d->map.sections[PHYS_SECTION_UNASSIGNED];
     subpage_t *subpage;
 
-    if (!section || section == &d->map.sections[PHYS_SECTION_UNASSIGNED] ||
-        !section_covers_addr(section, addr)) {
+    if (unlikely(!section || section == unassigned ||
+                 !section_covers_addr(section, addr))) {
         section = phys_page_find(d, addr);
         qatomic_set(&d->mru_section, section);
     }
-    if (resolve_subpage && section->mr->subpage) {
+    if (resolve_subpage && unlikely(section->mr->subpage)) {
         subpage = container_of(section->mr, subpage_t, iomem);
         section = &d->map.sections[subpage->sub_section[SUBPAGE_IDX(addr)]];
     }
@@ -370,17 +399,13 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
                                  hwaddr *plen, bool resolve_subpage)
 {
     MemoryRegionSection *section;
-    MemoryRegion *mr;
-    Int128 size;
+    hwaddr section_addr;
 
     section = address_space_lookup_region(d, addr, resolve_subpage);
-    /* Compute offset within MemoryRegionSection */
-    addr -= section->offset_within_address_space;
+    section_addr = section_addr_within_region(section, addr);
 
     /* Compute offset within MemoryRegion */
-    *xlat = addr + section->offset_within_region;
-
-    mr = section->mr;
+    *xlat = section_addr + section->offset_within_region;
 
     /* MMIO registers can be expected to perform full-width accesses based only
      * on their address, without considering adjacent registers that could
@@ -393,18 +418,8 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
      * everything works fine.  If the incoming length is large, however,
      * the caller really has to do the clamping through memory_access_size.
      */
-    if (memory_region_is_ram(mr)) {
-        size = section->size;
-        if (!int128_gethi(size)) {
-            hwaddr section_len = int128_getlo(size) - addr;
-
-            if (*plen > section_len) {
-                *plen = section_len;
-            }
-        } else {
-            Int128 diff = int128_sub(size, int128_make64(addr));
-            *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
-        }
+    if (likely(memory_region_is_ram(section->mr))) {
+        section_clamp_ram_plen(section, section_addr, plen);
     }
     return section;
 }
