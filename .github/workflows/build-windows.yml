@@ -176,7 +176,7 @@ jobs:
         Invoke-WebRequest -Uri "https://github.com/rainers/cv2pdb/releases/download/v0.54/cv2pdb-0.54.zip" -OutFile "cv2pdb.zip"
         7z x -ocv2pdb -y cv2pdb.zip
         cd dist
-        ../cv2pdb/cv2pdb64.exe -pxemu.pdb xemu.exe
+        ../cv2pdb/cv2pdb64.exe xemu.exe
     - name: Determine package version
       id: package_id
       shell: bash
@@ -342,7 +342,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path pdb-build | Out-Null
         Copy-Item dist/xemu.exe pdb-build/xemu.exe
         Push-Location pdb-build
-        ../cv2pdb/cv2pdb64.exe -pxemu.pdb xemu.exe
+        ../cv2pdb/cv2pdb64.exe xemu.exe
         Pop-Location
         Copy-Item pdb-build/xemu.pdb dist/xemu.pdb
     - name: Upload build artifact
