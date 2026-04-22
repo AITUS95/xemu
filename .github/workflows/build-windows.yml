@@ -37,18 +37,61 @@ jobs:
     - name: Install zstd
       if: ${{ matrix.arch == 'arm64' }}
       run: apt-get install zstd
-    - name: Extract source package
-      run: tar -xf xemu-${{ inputs.pkg_version }}.tar.zst --strip-components=2
     - name: Initialize compiler cache
       id: cache
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4
       with:
         path: |
-          build
+          .incremental-src
           ${{ env.CCACHE_DIR }}
           ${{ env.LTO_CACHE_DIR }}
         key: cache-wincross-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-${{ github.sha }}
         restore-keys: cache-wincross-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-
+    - name: Update incremental source tree
+      run: |
+        rm -rf _src_new
+        mkdir -p _src_new .incremental-src
+        tar -xf xemu-${{ inputs.pkg_version }}.tar.zst -C _src_new --strip-components=2
+        python3 - <<'PY'
+        import filecmp
+        import os
+        import shutil
+        from pathlib import Path
+
+        src = Path("_src_new")
+        dst = Path(".incremental-src")
+        keep_roots = {"build", "dist", "pdb-build", "build.log"}
+
+        for path in sorted(dst.rglob("*"), reverse=True):
+            rel = path.relative_to(dst)
+            if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            other = src / rel
+            if not other.exists():
+                if path.is_dir():
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    path.unlink()
+
+        for path in src.rglob("*"):
+            rel = path.relative_to(src)
+            out = dst / rel
+            if path.is_dir():
+                if out.exists() and not out.is_dir():
+                    out.unlink()
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.exists() and filecmp.cmp(path, out, shallow=False):
+                continue
+            if out.exists() and out.is_dir():
+                shutil.rmtree(out)
+            shutil.copy2(path, out)
+        PY
+        rm -rf _src_new
     - name: Setup ccache
       run: |
         mkdir -p ${CCACHE_DIR} /tmp/ccache-wrappers
@@ -78,14 +121,17 @@ jobs:
         fi
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Compile
-      run: ./build.sh -p win64-cross ${XEMU_BUILD_OPTIONS}
+      run: cd .incremental-src && ./build.sh -p win64-cross ${XEMU_BUILD_OPTIONS}
     - name: Report ccache stats
       run: ccache -s
     - name: Upload build artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       with:
         name: xemu-windows-${{ matrix.arch }}-${{ matrix.configuration }}
-        path: dist
+        path: .incremental-src/dist
+    - name: Cleanup incremental tree
+      if: always()
+      run: rm -rf .incremental-src/dist .incremental-src/pdb-build
 
   # Generate a symbols package for Windows. Use cv2pdb to generate PDBs from
   # DWARF and update + strip the executable. Re-package the original release
@@ -154,16 +200,59 @@ jobs:
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
         name: src
-    - name: Extract source package
-      run: tar -xf xemu-${{ inputs.pkg_version }}.tar.zst --strip-components=2
     - name: Initialize compiler cache
       uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v4
       with:
         path: |
-          build
+          .incremental-src
           ${{ env.CCACHE_DIR }}
         key: cache-wincross-${{ runner.os }}-x86_64-profile-${{ github.sha }}
         restore-keys: cache-wincross-${{ runner.os }}-x86_64-profile-
+    - name: Update incremental source tree
+      run: |
+        rm -rf _src_new
+        mkdir -p _src_new .incremental-src
+        tar -xf xemu-${{ inputs.pkg_version }}.tar.zst -C _src_new --strip-components=2
+        python3 - <<'PY'
+        import filecmp
+        import os
+        import shutil
+        from pathlib import Path
+
+        src = Path("_src_new")
+        dst = Path(".incremental-src")
+        keep_roots = {"build", "dist", "pdb-build", "build.log"}
+
+        for path in sorted(dst.rglob("*"), reverse=True):
+            rel = path.relative_to(dst)
+            if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            other = src / rel
+            if not other.exists():
+                if path.is_dir():
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    path.unlink()
+
+        for path in src.rglob("*"):
+            rel = path.relative_to(src)
+            out = dst / rel
+            if path.is_dir():
+                if out.exists() and not out.is_dir():
+                    out.unlink()
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.exists() and filecmp.cmp(path, out, shallow=False):
+                continue
+            if out.exists() and out.is_dir():
+                shutil.rmtree(out)
+            shutil.copy2(path, out)
+        PY
+        rm -rf _src_new
     - name: Setup ccache
       run: |
         mkdir -p ${CCACHE_DIR} /tmp/ccache-wrappers
@@ -174,6 +263,7 @@ jobs:
         ccache -z
     - name: Compile profiling build
       run: >
+        cd .incremental-src &&
         ./build.sh -p win64-cross
         --enable-debug-info
         --disable-lto
@@ -186,8 +276,11 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       with:
         name: xemu-windows-x86_64-profile
-        path: dist
+        path: .incremental-src/dist
         compression-level: 0
+    - name: Cleanup incremental tree
+      if: always()
+      run: rm -rf .incremental-src/dist .incremental-src/pdb-build
 
   generate_profile_pdb:
     name: Generate profiling package for Windows (x86_64)
