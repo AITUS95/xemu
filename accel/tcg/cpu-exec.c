@@ -162,13 +162,12 @@ static bool tb_lookup_cmp(const void *p, const void *d)
 {
     const TranslationBlock *tb = p;
     struct tb_desc *desc = (struct tb_desc *)d;
-    uint32_t cflags = tb_cflags(tb);
 
-    if ((cflags & CF_PCREL || tb->pc == desc->s.pc) &&
+    if ((tb_cflags(tb) & CF_PCREL || tb->pc == desc->s.pc) &&
         tb_page_addr0(tb) == desc->page_addr0 &&
         tb->cs_base == desc->s.cs_base &&
         tb->flags == desc->s.flags &&
-        (cflags & ~CF_INVALID) == desc->s.cflags) {
+        (tb_cflags(tb) & ~CF_INVALID) == desc->s.cflags) {
         /* check next page if needed */
         tb_page_addr_t tb_phys_page1 = tb_page_addr1(tb);
         if (tb_phys_page1 == -1) {

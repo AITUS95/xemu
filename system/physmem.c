@@ -312,12 +312,13 @@ void address_space_dispatch_compact(AddressSpaceDispatch *d)
 static inline bool section_covers_addr(const MemoryRegionSection *section,
                                        hwaddr addr)
 {
+    Int128 size = section->size;
+
     /* Memory topology clips a memory region to [0, 2^64); size.hi > 0 means
      * the section must cover the entire address space.
      */
-    return int128_gethi(section->size) ||
-           range_covers_byte(section->offset_within_address_space,
-                             int128_getlo(section->size), addr);
+    return int128_gethi(size) ||
+           addr - section->offset_within_address_space < int128_getlo(size);
 }
 
 static MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr addr)
@@ -370,7 +371,7 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
 {
     MemoryRegionSection *section;
     MemoryRegion *mr;
-    Int128 diff;
+    Int128 size;
 
     section = address_space_lookup_region(d, addr, resolve_subpage);
     /* Compute offset within MemoryRegionSection */
@@ -393,8 +394,17 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
      * the caller really has to do the clamping through memory_access_size.
      */
     if (memory_region_is_ram(mr)) {
-        diff = int128_sub(section->size, int128_make64(addr));
-        *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
+        size = section->size;
+        if (!int128_gethi(size)) {
+            hwaddr section_len = int128_getlo(size) - addr;
+
+            if (*plen > section_len) {
+                *plen = section_len;
+            }
+        } else {
+            Int128 diff = int128_sub(size, int128_make64(addr));
+            *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
+        }
     }
     return section;
 }
