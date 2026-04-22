@@ -134,7 +134,7 @@ jobs:
           "$(sha256sum build.sh configure | sha256sum | cut -d' ' -f1)")"
 
         if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
-          make -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
+          make -C build -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
           rm -rf dist
           mkdir -p dist
           cp build/qemu-system-i386w.exe dist/xemu.exe
@@ -299,7 +299,7 @@ jobs:
           "--extra-ldflags=-Wl,--build-id=sha1")"
 
         if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
-          make -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
+          make -C build -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
           rm -rf dist
           mkdir -p dist
           cp build/qemu-system-i386w.exe dist/xemu.exe
