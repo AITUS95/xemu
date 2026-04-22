@@ -176,7 +176,7 @@ jobs:
         Invoke-WebRequest -Uri "https://github.com/rainers/cv2pdb/releases/download/v0.54/cv2pdb-0.54.zip" -OutFile "cv2pdb.zip"
         7z x -ocv2pdb -y cv2pdb.zip
         cd dist
-        ../cv2pdb/cv2pdb64.exe xemu.exe
+        ../cv2pdb/cv2pdb64.exe -pxemu.pdb xemu.exe
     - name: Determine package version
       id: package_id
       shell: bash
@@ -295,7 +295,7 @@ jobs:
           "--enable-debug-info" \
           "--disable-lto" \
           "--disable-strip" \
-          "--extra-cflags=-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
+          "--extra-cflags=-gdwarf-4 -g3 -femit-struct-debug-reduced -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
           "--extra-ldflags=-Wl,--build-id=sha1")"
 
         if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
@@ -309,7 +309,7 @@ jobs:
             --enable-debug-info \
             --disable-lto \
             --disable-strip \
-            --extra-cflags="-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
+            --extra-cflags="-gdwarf-4 -g3 -femit-struct-debug-reduced -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
             --extra-ldflags="-Wl,--build-id=sha1"
           printf '%s' "${stamp_value}" > "${stamp_file}"
         fi
@@ -342,7 +342,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path pdb-build | Out-Null
         Copy-Item dist/xemu.exe pdb-build/xemu.exe
         Push-Location pdb-build
-        ../cv2pdb/cv2pdb64.exe xemu.exe
+        ../cv2pdb/cv2pdb64.exe -pxemu.pdb xemu.exe
         Pop-Location
         Copy-Item pdb-build/xemu.pdb dist/xemu.pdb
     - name: Upload build artifact
