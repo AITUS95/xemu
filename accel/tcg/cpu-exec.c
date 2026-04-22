@@ -162,12 +162,13 @@ static bool tb_lookup_cmp(const void *p, const void *d)
 {
     const TranslationBlock *tb = p;
     struct tb_desc *desc = (struct tb_desc *)d;
+    uint32_t cflags = tb_cflags(tb);
 
-    if ((tb_cflags(tb) & CF_PCREL || tb->pc == desc->s.pc) &&
+    if ((cflags & CF_PCREL || tb->pc == desc->s.pc) &&
         tb_page_addr0(tb) == desc->page_addr0 &&
         tb->cs_base == desc->s.cs_base &&
         tb->flags == desc->s.flags &&
-        (tb_cflags(tb) & ~CF_INVALID) == desc->s.cflags) {
+        (cflags & ~CF_INVALID) == desc->s.cflags) {
         /* check next page if needed */
         tb_page_addr_t tb_phys_page1 = tb_page_addr1(tb);
         if (tb_phys_page1 == -1) {
@@ -237,19 +238,17 @@ uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
 }
 
 static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
-                                                    const TCGTBCPUState *s,
+                                                    vaddr pc,
+                                                    uint64_t cs_base,
+                                                    uint64_t state_tag,
                                                     uint32_t hash)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
-    uint64_t state_tag;
 
-    if (unlikely(jce->pc != s->pc || jce->cs_base != s->cs_base)) {
-        return NULL;
-    }
-
-    state_tag = tb_jmp_cache_state_tag(s);
-    if (unlikely(jce->state_tag != state_tag)) {
+    if (unlikely(jce->pc != pc ||
+                 jce->cs_base != cs_base ||
+                 jce->state_tag != state_tag)) {
         return NULL;
     }
 
@@ -275,7 +274,8 @@ static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
 }
 
 static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
-                                               uint32_t hash)
+                                               uint32_t hash,
+                                               uint64_t state_tag)
 {
     TranslationBlock *tb = tb_htable_lookup(cpu, s);
 
@@ -283,8 +283,7 @@ static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
         return NULL;
     }
 
-    tb_jmp_cache_store(cpu, hash, s.pc, s.cs_base,
-                       tb_jmp_cache_state_tag(&s), tb);
+    tb_jmp_cache_store(cpu, hash, s.pc, s.cs_base, state_tag, tb);
     return tb;
 }
 
@@ -320,17 +319,19 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 {
     TranslationBlock *tb;
     uint32_t hash;
+    uint64_t state_tag;
 
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(s.cflags & CF_INVALID));
 
     hash = tb_jmp_cache_hash_func(s.pc);
-    tb = tb_jmp_cache_lookup(cpu, &s, hash);
+    state_tag = tb_jmp_cache_state_tag(&s);
+    tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
     if (likely(tb)) {
         goto hit;
     }
 
-    tb = tb_lookup_slow(cpu, s, hash);
+    tb = tb_lookup_slow(cpu, s, hash, state_tag);
     if (unlikely(tb == NULL)) {
         return NULL;
     }
@@ -476,10 +477,11 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 
     {
         uint32_t hash = tb_jmp_cache_hash_func(s.pc);
+        uint64_t state_tag = tb_jmp_cache_state_tag(&s);
 
-        tb = tb_jmp_cache_lookup(cpu, &s, hash);
+        tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
         if (unlikely(tb == NULL)) {
-            tb = tb_lookup_slow(cpu, s, hash);
+            tb = tb_lookup_slow(cpu, s, hash, state_tag);
             if (tb == NULL) {
                 return tcg_code_gen_epilogue;
             }
