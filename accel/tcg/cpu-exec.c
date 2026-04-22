@@ -223,6 +223,11 @@ static TranslationBlock *tb_htable_lookup(CPUState *cpu, TCGTBCPUState s)
     return tb_htable_lookup_common(cpu, s, &tb_ctx.htable, tb_lookup_cmp);
 }
 
+static inline uint64_t tb_jmp_cache_state_tag(uint32_t flags, uint32_t cflags)
+{
+    return flags | ((uint64_t)cflags << 32);
+}
+
 static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
                                                     TCGTBCPUState s,
                                                     uint32_t hash)
@@ -232,8 +237,8 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
 
     if (unlikely(jce->pc != s.pc ||
                  jce->cs_base != s.cs_base ||
-                 jce->flags != s.flags ||
-                 jce->cflags != s.cflags)) {
+                 jce->state_tag != tb_jmp_cache_state_tag(s.flags,
+                                                          s.cflags))) {
         return NULL;
     }
 
@@ -245,15 +250,14 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
 }
 
 static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
-                                      vaddr pc, TranslationBlock *tb)
+                                      TCGTBCPUState s, TranslationBlock *tb)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
-    jce->pc = pc;
-    jce->cs_base = tb->cs_base;
-    jce->flags = tb->flags;
-    jce->cflags = tb_cflags(tb);
+    jce->pc = s.pc;
+    jce->cs_base = s.cs_base;
+    jce->state_tag = tb_jmp_cache_state_tag(s.flags, s.cflags);
     qatomic_set(&jce->tb, tb);
 }
 
@@ -304,7 +308,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
         return NULL;
     }
 
-    tb_jmp_cache_store(cpu, hash, s.pc, tb);
+    tb_jmp_cache_store(cpu, hash, s, tb);
 
 hit:
     /*
@@ -1029,7 +1033,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * for the fast lookup
                  */
                 h = tb_jmp_cache_hash_func(s.pc);
-                tb_jmp_cache_store(cpu, h, s.pc, tb);
+                tb_jmp_cache_store(cpu, h, s, tb);
             }
 
 #ifndef CONFIG_USER_ONLY
