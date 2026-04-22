@@ -276,6 +276,10 @@ if test -z "${skip_configure}"; then
         "$@"
 fi
 
-time make -j"${job_count}" ${target} 2>&1 | tee build.log
+if test -f build/Makefile; then
+    time make -C build -j"${job_count}" ${target} 2>&1 | tee build.log
+else
+    time make -j"${job_count}" ${target} 2>&1 | tee build.log
+fi
 
 "${postbuild}" # call post build functions
