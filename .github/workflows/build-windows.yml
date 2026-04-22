@@ -61,10 +61,13 @@ jobs:
         src = Path("_src_new")
         dst = Path(".incremental-src")
         keep_roots = {"build", "dist", "pdb-build", "build.log"}
+        keep_prefixes = (".build-config-",)
 
         for path in sorted(dst.rglob("*"), reverse=True):
             rel = path.relative_to(dst)
             if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            if rel.name.startswith(keep_prefixes):
                 continue
             other = src / rel
             if not other.exists():
@@ -240,10 +243,13 @@ jobs:
         src = Path("_src_new")
         dst = Path(".incremental-src")
         keep_roots = {"build", "dist", "pdb-build", "build.log"}
+        keep_prefixes = (".build-config-",)
 
         for path in sorted(dst.rglob("*"), reverse=True):
             rel = path.relative_to(dst)
             if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            if rel.name.startswith(keep_prefixes):
                 continue
             other = src / rel
             if not other.exists():
