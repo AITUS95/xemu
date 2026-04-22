@@ -170,8 +170,9 @@ jobs:
     - name: Upload build artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       with:
-        name: xemu-windows-x86_64-profile-raw
+        name: xemu-windows-x86_64-profile
         path: dist
+        compression-level: 0
 
   generate_profile_pdb:
     name: Generate profiling package for Windows (x86_64)
@@ -181,7 +182,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
-        name: xemu-windows-x86_64-profile-raw
+        name: xemu-windows-x86_64-profile
         path: dist
     - name: Generate PDB
       run: |
@@ -209,3 +210,4 @@ jobs:
         name: xemu-windows-x86_64-profile
         path: dist-profile
         compression-level: 0
+        overwrite: true
