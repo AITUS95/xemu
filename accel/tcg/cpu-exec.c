@@ -223,6 +223,40 @@ static TranslationBlock *tb_htable_lookup(CPUState *cpu, TCGTBCPUState s)
     return tb_htable_lookup_common(cpu, s, &tb_ctx.htable, tb_lookup_cmp);
 }
 
+static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
+                                                    TCGTBCPUState s,
+                                                    uint32_t hash)
+{
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    if (unlikely(jce->pc != s.pc ||
+                 jce->cs_base != s.cs_base ||
+                 jce->flags != s.flags ||
+                 jce->cflags != s.cflags)) {
+        return NULL;
+    }
+
+    /*
+     * Invalidations clear only tb. Keep the pointer load last so a metadata
+     * mismatch can fail without paying for an atomic read on the miss path.
+     */
+    return qatomic_read(&jce->tb);
+}
+
+static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
+                                      vaddr pc, TranslationBlock *tb)
+{
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    jce->pc = pc;
+    jce->cs_base = tb->cs_base;
+    jce->flags = tb->flags;
+    jce->cflags = tb_cflags(tb);
+    qatomic_set(&jce->tb, tb);
+}
+
 static bool inv_tb_lookup_cmp(const void *p, const void *d)
 {
     const TranslationBlock *tb = p;
@@ -254,23 +288,14 @@ TranslationBlock *inv_tb_htable_lookup(CPUState *cpu, TCGTBCPUState s)
 static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 {
     TranslationBlock *tb;
-    CPUJumpCache *jc;
-    typeof(jc->array[0]) *jce;
     uint32_t hash;
 
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(s.cflags & CF_INVALID));
 
     hash = tb_jmp_cache_hash_func(s.pc);
-    jc = cpu->tb_jmp_cache;
-    jce = &jc->array[hash];
-
-    tb = qatomic_read(&jce->tb);
-    if (likely(tb &&
-               jce->pc == s.pc &&
-               jce->cs_base == s.cs_base &&
-               jce->flags == s.flags &&
-               jce->cflags == s.cflags)) {
+    tb = tb_jmp_cache_lookup(cpu, s, hash);
+    if (likely(tb)) {
         goto hit;
     }
 
@@ -279,11 +304,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
         return NULL;
     }
 
-    jce->pc = s.pc;
-    jce->cs_base = tb->cs_base;
-    jce->flags = tb->flags;
-    jce->cflags = tb_cflags(tb);
-    qatomic_set(&jce->tb, tb);
+    tb_jmp_cache_store(cpu, hash, s.pc, tb);
 
 hit:
     /*
@@ -997,7 +1018,6 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
             tb = tb_lookup(cpu, s);
             if (tb == NULL) {
-                CPUJumpCache *jc;
                 uint32_t h;
 
                 mmap_lock();
@@ -1009,12 +1029,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * for the fast lookup
                  */
                 h = tb_jmp_cache_hash_func(s.pc);
-                jc = cpu->tb_jmp_cache;
-                jc->array[h].pc = s.pc;
-                jc->array[h].cs_base = tb->cs_base;
-                jc->array[h].flags = tb->flags;
-                jc->array[h].cflags = tb_cflags(tb);
-                qatomic_set(&jc->array[h].tb, tb);
+                tb_jmp_cache_store(cpu, h, s.pc, tb);
             }
 
 #ifndef CONFIG_USER_ONLY
