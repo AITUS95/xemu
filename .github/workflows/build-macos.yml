@@ -27,8 +27,6 @@ jobs:
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
         name: src
-    - name: Extract source package
-      run: tar -xf xemu-${{ inputs.pkg_version }}.tar.zst --strip-components=2
     - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '3.12'
@@ -44,11 +42,58 @@ jobs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4
       with:
         path: |
-          macos-pkgs
+          .incremental-src
           ${{ env.CCACHE_DIR }}
           ${{ env.LTO_CACHE_DIR }}
         key: cache-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-${{ github.sha }}
         restore-keys: cache-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-
+    - name: Update incremental source tree
+      run: |
+        rm -rf _src_new
+        mkdir -p _src_new .incremental-src
+        tar -xf xemu-${{ inputs.pkg_version }}.tar.zst -C _src_new --strip-components=2
+        python3 - <<'PY'
+        import filecmp
+        import shutil
+        from pathlib import Path
+
+        src = Path("_src_new")
+        dst = Path(".incremental-src")
+        keep_roots = {"build", "dist", "build.log", "macos-libs", "macos-pkgs"}
+        keep_prefixes = (".build-config-",)
+
+        for path in sorted(dst.rglob("*"), reverse=True):
+            rel = path.relative_to(dst)
+            if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            if rel.name.startswith(keep_prefixes):
+                continue
+            other = src / rel
+            if not other.exists():
+                if path.is_dir():
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    path.unlink()
+
+        for path in src.rglob("*"):
+            rel = path.relative_to(src)
+            out = dst / rel
+            if path.is_dir():
+                if out.exists() and not out.is_dir():
+                    out.unlink()
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.exists() and filecmp.cmp(path, out, shallow=False):
+                continue
+            if out.exists() and out.is_dir():
+                shutil.rmtree(out)
+            shutil.copy2(path, out)
+        PY
+        rm -rf _src_new
     - name: Setup ccache
       run: |
         echo "PATH=/opt/homebrew/opt/ccache/libexec:$PATH" >> "$GITHUB_ENV"
@@ -71,7 +116,22 @@ jobs:
         fi
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Compile
-      run: ./build.sh -a ${{ matrix.arch }} ${XEMU_BUILD_OPTIONS}
+      run: |
+        cd .incremental-src
+        stamp_file=.build-config-macos-${{ matrix.arch }}-${{ matrix.configuration }}
+        stamp_value="$(printf '%s\n' \
+          "${stamp_file}" \
+          "${{ matrix.arch }}" \
+          "${{ matrix.configuration }}" \
+          "${XEMU_BUILD_OPTIONS}" \
+          "$(shasum -a 256 build.sh configure | shasum -a 256 | awk '{print $1}')")"
+
+        if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
+          ./build.sh --skip-configure -a ${{ matrix.arch }} ${XEMU_BUILD_OPTIONS}
+        else
+          ./build.sh -a ${{ matrix.arch }} ${XEMU_BUILD_OPTIONS}
+          printf '%s' "${stamp_value}" > "${stamp_file}"
+        fi
     - name: Report ccache stats
       run: ccache -s
     - name: Package
@@ -82,8 +142,8 @@ jobs:
         pkg_filename="xemu-${VERSION}-macos-${{ matrix.arch }}-unsigned.zip"
         echo "pkg_filename=${pkg_filename}" >> $GITHUB_OUTPUT
 
-        pushd dist
-        zip -r ../${pkg_filename} *
+        pushd .incremental-src/dist
+        zip -r ../../${pkg_filename} *
         popd
     - name: Upload build artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
@@ -91,6 +151,8 @@ jobs:
         name: xemu-macos-${{ matrix.arch }}-${{ matrix.configuration }}
         path: ${{ steps.package.outputs.pkg_filename }}
         compression-level: 0
+    - name: Cleanup incremental outputs
+      run: rm -rf .incremental-src/dist
 
   build_universal:
     name: Build macOS Universal bundle (${{ matrix.configuration }})

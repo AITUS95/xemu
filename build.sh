@@ -95,6 +95,7 @@ debug_opts=''
 build_cflags=''
 default_job_count='12'
 sys_ldflags=''
+skip_configure=''
 
 get_job_count () {
 	if command -v 'nproc' >/dev/null
@@ -143,6 +144,10 @@ do
         ;;
     '--debug')
         debug="y"
+        shift
+        ;;
+    '--skip-configure')
+        skip_configure="y"
         shift
         ;;
     '-p'*)
@@ -262,12 +267,14 @@ configure="${project_source_dir}/configure"
 
 set -x # Print commands from now on
 
-"${configure}" \
-    --extra-cflags="-DXBOX=1 ${build_cflags} ${sys_cflags} ${CFLAGS}" \
-    --extra-ldflags="${sys_ldflags}" \
-    --target-list=i386-softmmu \
-    ${opts} \
-    "$@"
+if test -z "${skip_configure}"; then
+    "${configure}" \
+        --extra-cflags="-DXBOX=1 ${build_cflags} ${sys_cflags} ${CFLAGS}" \
+        --extra-ldflags="${sys_ldflags}" \
+        --target-list=i386-softmmu \
+        ${opts} \
+        "$@"
+fi
 
 time make -j"${job_count}" ${target} 2>&1 | tee build.log
 

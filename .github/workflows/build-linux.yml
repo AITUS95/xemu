@@ -56,6 +56,7 @@ jobs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4
       with:
         path: |
+          .incremental-src
           ${{ env.CCACHE_DIR }}
           ${{ env.LTO_CACHE_DIR }}
         key: cache-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-${{ github.sha }}
@@ -64,13 +65,56 @@ jobs:
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
         name: src
-    - name: Extract source package
+    - name: Update incremental source tree
       run: |
-        mkdir src
-        tar -xf xemu-${{ inputs.pkg_version }}.tar.zst -C src --strip-components=2
+        rm -rf _src_new
+        mkdir -p _src_new .incremental-src
+        tar -xf xemu-${{ inputs.pkg_version }}.tar.zst -C _src_new --strip-components=2
+        python3 - <<'PY'
+        import filecmp
+        import shutil
+        from pathlib import Path
+
+        src = Path("_src_new")
+        dst = Path(".incremental-src")
+        keep_roots = {"build", "dist", "build.log"}
+        keep_prefixes = (".build-config-",)
+
+        for path in sorted(dst.rglob("*"), reverse=True):
+            rel = path.relative_to(dst)
+            if rel.parts and rel.parts[0] in keep_roots:
+                continue
+            if rel.name.startswith(keep_prefixes):
+                continue
+            other = src / rel
+            if not other.exists():
+                if path.is_dir():
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    path.unlink()
+
+        for path in src.rglob("*"):
+            rel = path.relative_to(src)
+            out = dst / rel
+            if path.is_dir():
+                if out.exists() and not out.is_dir():
+                    out.unlink()
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if out.exists() and filecmp.cmp(path, out, shallow=False):
+                continue
+            if out.exists() and out.is_dir():
+                shutil.rmtree(out)
+            shutil.copy2(path, out)
+        PY
+        rm -rf _src_new
     - name: Create debian changelog
       run: |
-        pushd src
+        pushd .incremental-src
         echo -e "\
         xemu (1:0.0.0-0) unstable; urgency=medium\n\
           Built from ${{ inputs.pkg_version }})\n\
@@ -89,7 +133,7 @@ jobs:
       run: |
         sudo apt-get -qy update
         sudo apt-get install ccache libfuse2 libusb-1.0-0-dev #clang-21 lld-21 llvm-21-dev
-        pushd src
+        pushd .incremental-src
         sudo apt-get -qy build-dep .
     - name: Install LLVM 21
       shell: bash
@@ -135,15 +179,22 @@ jobs:
         sudo rm /usr/bin/dpkg-genbuildinfo
         sudo ln -s /bin/true /usr/bin/dpkg-genbuildinfo
 
-        pushd src
-        dpkg-buildpackage --no-sign -b
+        pushd .incremental-src
+        export XEMU_BUILD_STAMP_FILE=.build-config-linux-${{ matrix.arch }}-${{ matrix.configuration }}
+        export XEMU_BUILD_STAMP_VALUE="$(printf '%s\n' \
+          "${XEMU_BUILD_STAMP_FILE}" \
+          "${{ matrix.arch }}" \
+          "${{ matrix.configuration }}" \
+          "${XEMU_BUILD_OPTIONS}" \
+          "$(sha256sum build.sh configure debian/rules | sha256sum | cut -d' ' -f1)")"
+        dpkg-buildpackage --no-sign -b -nc
         popd
 
         mkdir -p deb
         mv *.deb *.ddeb deb
     - name: Test
       run: |
-        pushd src/build
+        pushd .incremental-src/build
         ./pyvenv/bin/meson compile test-xbox
         ./pyvenv/bin/meson test --suite xbox --no-rebuild
         popd
@@ -159,7 +210,7 @@ jobs:
         ar x deb/*.deb
         mkdir appimage
         tar -C appimage -xf data.tar*
-        install -DT src/xemu.metainfo.xml appimage/usr/share/metainfo/xemu.metainfo.xml
+        install -DT .incremental-src/xemu.metainfo.xml appimage/usr/share/metainfo/xemu.metainfo.xml
 
         ./linuxdeploy-${{ matrix.arch }}.AppImage --output appimage --appdir appimage
     - name: Bundle artifacts
@@ -173,3 +224,5 @@ jobs:
         name: ${{ env.ARTIFACT_NAME }}
         path: dist
         compression-level: 0
+    - name: Cleanup incremental outputs
+      run: rm -rf .incremental-src/dist
