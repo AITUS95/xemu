@@ -30,8 +30,17 @@ static uint8_t *convert_texture_data__CR8YB8CB8YA8(uint8_t *data_out,
     for (y = 0; y < height; y++) {
         const uint8_t *line = &data_in[y * pitch];
         const uint32_t row_offset = y * width;
-        for (x = 0; x < width; x++) {
+        for (x = 0; x + 1 < width; x += 2) {
+            uint8_t *pixel0 = &data_out[(row_offset + x) * 4];
+            uint8_t *pixel1 = pixel0 + 4;
+
+            convert_yuy2_pair_to_rgb(&line[x * 2], pixel0, pixel1);
+            pixel0[3] = 255;
+            pixel1[3] = 255;
+        }
+        if (x < width) {
             uint8_t *pixel = &data_out[(row_offset + x) * 4];
+
             convert_yuy2_to_rgb(line, x, &pixel[0], &pixel[1], &pixel[2]);
             pixel[3] = 255;
         }

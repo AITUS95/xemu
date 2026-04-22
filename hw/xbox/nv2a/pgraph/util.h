@@ -46,21 +46,20 @@ float convert_f24_to_float(uint32_t f24) {
 static inline 
 uint8_t cliptobyte(int x)
 {
-    return (uint8_t)((x < 0) ? 0 : ((x > 255) ? 255 : x));
+    if ((unsigned int)x <= 255) {
+        return (uint8_t)x;
+    }
+    return (x < 0) ? 0 : 255;
 }
 
 static inline 
 void convert_yuy2_to_rgb(const uint8_t *line, unsigned int ix,
                                 uint8_t *r, uint8_t *g, uint8_t* b) {
-    int c, d, e;
-    c = (int)line[ix * 2] - 16;
-    if (ix % 2) {
-        d = (int)line[ix * 2 - 1] - 128;
-        e = (int)line[ix * 2 + 1] - 128;
-    } else {
-        d = (int)line[ix * 2 + 1] - 128;
-        e = (int)line[ix * 2 + 3] - 128;
-    }
+    const uint8_t *src = line + ((ix & ~1u) * 2);
+    int c = (int)src[(ix & 1u) ? 2 : 0] - 16;
+    int d = (int)src[1] - 128;
+    int e = (int)src[3] - 128;
+
     *r = cliptobyte((298 * c + 409 * e + 128) >> 8);
     *g = cliptobyte((298 * c - 100 * d - 208 * e + 128) >> 8);
     *b = cliptobyte((298 * c + 516 * d + 128) >> 8);
@@ -69,18 +68,54 @@ void convert_yuy2_to_rgb(const uint8_t *line, unsigned int ix,
 static inline 
 void convert_uyvy_to_rgb(const uint8_t *line, unsigned int ix,
                                 uint8_t *r, uint8_t *g, uint8_t* b) {
-    int c, d, e;
-    c = (int)line[ix * 2 + 1] - 16;
-    if (ix % 2) {
-        d = (int)line[ix * 2 - 2] - 128;
-        e = (int)line[ix * 2 + 0] - 128;
-    } else {
-        d = (int)line[ix * 2 + 0] - 128;
-        e = (int)line[ix * 2 + 2] - 128;
-    }
+    const uint8_t *src = line + ((ix & ~1u) * 2);
+    int c = (int)src[(ix & 1u) ? 3 : 1] - 16;
+    int d = (int)src[0] - 128;
+    int e = (int)src[2] - 128;
+
     *r = cliptobyte((298 * c + 409 * e + 128) >> 8);
     *g = cliptobyte((298 * c - 100 * d - 208 * e + 128) >> 8);
     *b = cliptobyte((298 * c + 516 * d + 128) >> 8);
+}
+
+static inline
+void convert_yuy2_pair_to_rgb(const uint8_t *src,
+                              uint8_t *rgb0, uint8_t *rgb1)
+{
+    int d = (int)src[1] - 128;
+    int e = (int)src[3] - 128;
+    int re = 409 * e + 128;
+    int gde = -100 * d - 208 * e + 128;
+    int bd = 516 * d + 128;
+    int c0 = 298 * ((int)src[0] - 16);
+    int c1 = 298 * ((int)src[2] - 16);
+
+    rgb0[0] = cliptobyte((c0 + re) >> 8);
+    rgb0[1] = cliptobyte((c0 + gde) >> 8);
+    rgb0[2] = cliptobyte((c0 + bd) >> 8);
+    rgb1[0] = cliptobyte((c1 + re) >> 8);
+    rgb1[1] = cliptobyte((c1 + gde) >> 8);
+    rgb1[2] = cliptobyte((c1 + bd) >> 8);
+}
+
+static inline
+void convert_uyvy_pair_to_rgb(const uint8_t *src,
+                              uint8_t *rgb0, uint8_t *rgb1)
+{
+    int d = (int)src[0] - 128;
+    int e = (int)src[2] - 128;
+    int re = 409 * e + 128;
+    int gde = -100 * d - 208 * e + 128;
+    int bd = 516 * d + 128;
+    int c0 = 298 * ((int)src[1] - 16);
+    int c1 = 298 * ((int)src[3] - 16);
+
+    rgb0[0] = cliptobyte((c0 + re) >> 8);
+    rgb0[1] = cliptobyte((c0 + gde) >> 8);
+    rgb0[2] = cliptobyte((c0 + bd) >> 8);
+    rgb1[0] = cliptobyte((c1 + re) >> 8);
+    rgb1[1] = cliptobyte((c1 + gde) >> 8);
+    rgb1[2] = cliptobyte((c1 + bd) >> 8);
 }
 
 #endif

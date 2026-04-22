@@ -362,10 +362,23 @@ uint8_t *pgraph_convert_texture_data(const TextureShape s, const uint8_t *data,
         // conversion
         size = width * height * 4;
         converted_data = g_malloc(size);
-        uint8_t *pixel = converted_data;
         for (int y = 0; y < height; y++) {
             const uint8_t *line = &data[y * row_pitch * depth];
-            for (int x = 0; x < width; x++, pixel += 4) {
+            uint8_t *pixel = &converted_data[y * width * 4];
+            int x;
+
+            for (x = 0; x + 1 < width; x += 2, pixel += 8) {
+                if (s.color_format ==
+                    NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8) {
+                    convert_yuy2_pair_to_rgb(&line[x * 2], pixel, pixel + 4);
+                } else {
+                    convert_uyvy_pair_to_rgb(&line[x * 2], pixel, pixel + 4);
+                }
+                pixel[3] = 255;
+                pixel[7] = 255;
+            }
+
+            if (x < width) {
                 if (s.color_format ==
                     NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8) {
                     convert_yuy2_to_rgb(line, x, &pixel[0], &pixel[1],
