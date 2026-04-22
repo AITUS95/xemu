@@ -121,7 +121,25 @@ jobs:
         fi
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Compile
-      run: cd .incremental-src && ./build.sh -p win64-cross ${XEMU_BUILD_OPTIONS}
+      run: |
+        cd .incremental-src
+        stamp_file=.build-config-win64-${{ matrix.arch }}-${{ matrix.configuration }}
+        stamp_value="$(printf '%s\n' \
+          "${{ matrix.arch }}" \
+          "${{ matrix.configuration }}" \
+          "${XEMU_BUILD_OPTIONS}" \
+          "$(sha256sum build.sh configure | sha256sum | cut -d' ' -f1)")"
+
+        if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
+          make -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
+          rm -rf dist
+          mkdir -p dist
+          cp build/qemu-system-i386w.exe dist/xemu.exe
+          python3 ./scripts/gen-license.py --platform windows > dist/LICENSE.txt
+        else
+          ./build.sh -p win64-cross ${XEMU_BUILD_OPTIONS}
+          printf '%s' "${stamp_value}" > "${stamp_file}"
+        fi
     - name: Report ccache stats
       run: ccache -s
     - name: Upload build artifact
@@ -262,14 +280,33 @@ jobs:
         echo "PATH=/tmp/ccache-wrappers:$PATH" >> "$GITHUB_ENV"
         ccache -z
     - name: Compile profiling build
-      run: >
-        cd .incremental-src &&
-        ./build.sh -p win64-cross
-        --enable-debug-info
-        --disable-lto
-        --disable-strip
-        --extra-cflags="-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls"
-        --extra-ldflags="-Wl,--build-id=sha1"
+      run: |
+        cd .incremental-src
+        stamp_file=.build-config-win64-profile
+        stamp_value="$(printf '%s\n' \
+          "${stamp_file}" \
+          "$(sha256sum build.sh configure | sha256sum | cut -d' ' -f1)" \
+          "--enable-debug-info" \
+          "--disable-lto" \
+          "--disable-strip" \
+          "--extra-cflags=-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
+          "--extra-ldflags=-Wl,--build-id=sha1")"
+
+        if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
+          make -j"$(nproc)" qemu-system-i386w.exe 2>&1 | tee build.log
+          rm -rf dist
+          mkdir -p dist
+          cp build/qemu-system-i386w.exe dist/xemu.exe
+          python3 ./scripts/gen-license.py --platform windows > dist/LICENSE.txt
+        else
+          ./build.sh -p win64-cross \
+            --enable-debug-info \
+            --disable-lto \
+            --disable-strip \
+            --extra-cflags="-gdwarf-4 -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls" \
+            --extra-ldflags="-Wl,--build-id=sha1"
+          printf '%s' "${stamp_value}" > "${stamp_file}"
+        fi
     - name: Report ccache stats
       run: ccache -s
     - name: Upload build artifact
