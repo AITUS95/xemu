@@ -190,24 +190,10 @@ jobs:
         7z x -ocv2pdb -y cv2pdb.zip
         cd dist
         ../cv2pdb/cv2pdb64.exe xemu.exe
-    - name: Determine package version
-      id: package_id
-      shell: bash
-      env:
-        VERSION: ${{ inputs.pkg_version }}
-      run: |
-        echo "pkg_filename=xemu-${VERSION}-windows-x86_64-profile.zip" >> $GITHUB_OUTPUT
-        echo "pdb_filename=xemu-${VERSION}-windows-x86_64-profile-pdb.zip" >> $GITHUB_OUTPUT
-    - name: Package
-      run: |
-        mkdir dist-profile
-        cd dist
-        7z a -tzip ../dist-profile/${{ steps.package_id.outputs.pkg_filename}} *
-        7z a -tzip ../dist-profile/${{ steps.package_id.outputs.pdb_filename}} "-ir!*.pdb"
     - name: Upload build artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       with:
         name: xemu-windows-x86_64-profile
-        path: dist-profile
+        path: dist
         compression-level: 0
         overwrite: true
