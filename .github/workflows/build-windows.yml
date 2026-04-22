@@ -24,6 +24,8 @@ jobs:
     env:
       CCACHE_DIR: /tmp/xemu-ccache
       CCACHE_MAXSIZE: 512M
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
       LTO_CACHE_DIR: /tmp/xemu-lto-ccache
       CROSSPREFIX: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}-w64-mingw32.static-
       CROSSAR: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}-w64-mingw32.static-${{ matrix.arch == 'arm64' && 'ar' || 'gcc-ar' }}
@@ -48,7 +50,11 @@ jobs:
         restore-keys: cache-wincross-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.configuration }}-
     - name: Setup ccache
       run: |
-        mkdir -p ${CCACHE_DIR}
+        mkdir -p ${CCACHE_DIR} /tmp/ccache-wrappers
+        for tool in gcc g++; do
+          ln -sf "$(command -v ccache)" "/tmp/ccache-wrappers/${CROSSPREFIX}${tool}"
+        done
+        echo "PATH=/tmp/ccache-wrappers:$PATH" >> "$GITHUB_ENV"
         ccache -z
     - name: Setup build options
       run: |
@@ -138,6 +144,8 @@ jobs:
     env:
       CCACHE_DIR: /tmp/xemu-ccache
       CCACHE_MAXSIZE: 512M
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
       CROSSPREFIX: x86_64-w64-mingw32.static-
       CROSSAR: x86_64-w64-mingw32.static-gcc-ar
     steps:
@@ -155,7 +163,11 @@ jobs:
         restore-keys: cache-wincross-${{ runner.os }}-x86_64-profile-
     - name: Setup ccache
       run: |
-        mkdir -p ${CCACHE_DIR}
+        mkdir -p ${CCACHE_DIR} /tmp/ccache-wrappers
+        for tool in gcc g++; do
+          ln -sf "$(command -v ccache)" "/tmp/ccache-wrappers/${CROSSPREFIX}${tool}"
+        done
+        echo "PATH=/tmp/ccache-wrappers:$PATH" >> "$GITHUB_ENV"
         ccache -z
     - name: Compile profiling build
       run: >
@@ -188,8 +200,12 @@ jobs:
       run: |
         Invoke-WebRequest -Uri "https://github.com/rainers/cv2pdb/releases/download/v0.52/cv2pdb-0.52.zip" -OutFile "cv2pdb.zip"
         7z x -ocv2pdb -y cv2pdb.zip
-        cd dist
+        New-Item -ItemType Directory -Force -Path pdb-build | Out-Null
+        Copy-Item dist/xemu.exe pdb-build/xemu.exe
+        Push-Location pdb-build
         ../cv2pdb/cv2pdb64.exe xemu.exe
+        Pop-Location
+        Copy-Item pdb-build/xemu.pdb dist/xemu.pdb
     - name: Upload build artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
       with:
