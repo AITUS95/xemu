@@ -502,15 +502,15 @@ unassigned:
  *
  * This function is called from RCU critical section
  */
-static MemoryRegionSection flatview_do_translate(FlatView *fv,
-                                                 hwaddr addr,
-                                                 hwaddr *xlat,
-                                                 hwaddr *plen_out,
-                                                 hwaddr *page_mask_out,
-                                                 bool is_write,
-                                                 bool is_mmio,
-                                                 AddressSpace **target_as,
-                                                 MemTxAttrs attrs)
+static MemoryRegionSection address_space_do_translate(AddressSpaceDispatch *d,
+                                                      hwaddr addr,
+                                                      hwaddr *xlat,
+                                                      hwaddr *plen_out,
+                                                      hwaddr *page_mask_out,
+                                                      bool is_write,
+                                                      bool is_mmio,
+                                                      AddressSpace **target_as,
+                                                      MemTxAttrs attrs)
 {
     MemoryRegionSection *section;
     IOMMUMemoryRegion *iommu_mr;
@@ -520,9 +520,8 @@ static MemoryRegionSection flatview_do_translate(FlatView *fv,
         plen_out = &plen;
     }
 
-    section = address_space_translate_internal(
-            flatview_to_dispatch(fv), addr, xlat,
-            plen_out, is_mmio);
+    section = address_space_translate_internal(d, addr, xlat, plen_out,
+                                              is_mmio);
 
     iommu_mr = memory_region_get_iommu(section->mr);
     if (unlikely(iommu_mr)) {
@@ -539,6 +538,21 @@ static MemoryRegionSection flatview_do_translate(FlatView *fv,
     return *section;
 }
 
+static MemoryRegionSection flatview_do_translate(FlatView *fv,
+                                                 hwaddr addr,
+                                                 hwaddr *xlat,
+                                                 hwaddr *plen_out,
+                                                 hwaddr *page_mask_out,
+                                                 bool is_write,
+                                                 bool is_mmio,
+                                                 AddressSpace **target_as,
+                                                 MemTxAttrs attrs)
+{
+    return address_space_do_translate(flatview_to_dispatch(fv), addr, xlat,
+                                      plen_out, page_mask_out, is_write,
+                                      is_mmio, target_as, attrs);
+}
+
 /* Called from RCU critical section */
 IOMMUTLBEntry address_space_get_iotlb_entry(AddressSpace *as, hwaddr addr,
                                             bool is_write, MemTxAttrs attrs)
@@ -550,9 +564,9 @@ IOMMUTLBEntry address_space_get_iotlb_entry(AddressSpace *as, hwaddr addr,
      * This can never be MMIO, and we don't really care about plen,
      * but page mask.
      */
-    section = flatview_do_translate(address_space_to_flatview(as), addr, &xlat,
-                                    NULL, &page_mask, is_write, false, &as,
-                                    attrs);
+    section = address_space_do_translate(address_space_to_dispatch(as), addr,
+                                         &xlat, NULL, &page_mask, is_write,
+                                         false, &as, attrs);
 
     /* Illegal translation */
     if (section.mr == &io_mem_unassigned) {
@@ -738,7 +752,7 @@ address_space_translate_for_iotlb(CPUState *cpu, int asidx, hwaddr orig_addr,
             goto translate_fail;
         }
 
-        d = flatview_to_dispatch(address_space_to_flatview(iotlb.target_as));
+        d = address_space_to_dispatch(iotlb.target_as);
     }
 
     assert(!memory_region_is_iommu(section->mr));
@@ -3647,11 +3661,14 @@ MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
                                     MemTxAttrs attrs,
                                     const void *buf, hwaddr len)
 {
+    FlatView *fv;
+
     RCU_READ_LOCK_GUARD();
+    fv = address_space_to_flatview(as);
     while (len > 0) {
         hwaddr addr1, l = len;
-        MemoryRegion *mr = address_space_translate(as, addr, &addr1, &l,
-                                                   true, attrs);
+        MemoryRegion *mr = flatview_translate(fv, addr, &addr1, &l,
+                                              true, attrs);
 
         if (!memory_region_supports_direct_access(mr)) {
             l = memory_access_size(mr, l, addr1);
@@ -3670,6 +3687,8 @@ MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
 
 void address_space_flush_icache_range(AddressSpace *as, hwaddr addr, hwaddr len)
 {
+    FlatView *fv;
+
     /*
      * This function should do the same thing as an icache flush that was
      * triggered from within the guest. For TCG we are always cache coherent,
@@ -3681,10 +3700,11 @@ void address_space_flush_icache_range(AddressSpace *as, hwaddr addr, hwaddr len)
     }
 
     RCU_READ_LOCK_GUARD();
+    fv = address_space_to_flatview(as);
     while (len > 0) {
         hwaddr addr1, l = len;
-        MemoryRegion *mr = address_space_translate(as, addr, &addr1, &l, true,
-                                                   MEMTXATTRS_UNSPECIFIED);
+        MemoryRegion *mr = flatview_translate(fv, addr, &addr1, &l, true,
+                                              MEMTXATTRS_UNSPECIFIED);
 
         if (!memory_region_supports_direct_access(mr)) {
             l = memory_access_size(mr, l, addr1);
