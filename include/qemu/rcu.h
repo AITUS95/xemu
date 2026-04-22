@@ -81,13 +81,20 @@ struct rcu_reader_data get_rcu_reader(void);
 void set_rcu_reader(struct rcu_reader_data v);
 struct rcu_reader_data *get_ptr_rcu_reader_slow(void);
 
-static inline struct rcu_reader_data *get_ptr_rcu_reader(void)
+static inline __attribute__((always_inline))
+struct rcu_reader_data *rcu_tls_get_reader(void)
+{
+    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
+    return rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
+                               TlsGetValue(rcu_reader_tls_idx);
+}
+
+static inline __attribute__((always_inline))
+struct rcu_reader_data *get_ptr_rcu_reader(void)
 {
     struct rcu_reader_data *reader;
 
-    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
-    reader = rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
-                                 TlsGetValue(rcu_reader_tls_idx);
+    reader = rcu_tls_get_reader();
     if (likely(reader)) {
         return reader;
     }
@@ -98,7 +105,7 @@ static inline struct rcu_reader_data *get_ptr_rcu_reader(void)
 QEMU_DECLARE_CO_TLS(struct rcu_reader_data, rcu_reader)
 #endif
 
-static inline void rcu_read_lock(void)
+static inline __attribute__((always_inline)) void rcu_read_lock(void)
 {
     struct rcu_reader_data *p_rcu_reader = get_ptr_rcu_reader();
     unsigned ctr;
@@ -117,7 +124,7 @@ static inline void rcu_read_lock(void)
     smp_mb_placeholder();
 }
 
-static inline void rcu_read_unlock(void)
+static inline __attribute__((always_inline)) void rcu_read_unlock(void)
 {
     struct rcu_reader_data *p_rcu_reader = get_ptr_rcu_reader();
 

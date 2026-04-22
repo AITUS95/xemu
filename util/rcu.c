@@ -78,13 +78,6 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
 DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
 PVOID (WINAPI *rcu_tls_get_value)(DWORD);
 
-static inline struct rcu_reader_data *rcu_tls_get_reader(void)
-{
-    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
-    return rcu_tls_get_value ? rcu_tls_get_value(rcu_reader_tls_idx) :
-                               TlsGetValue(rcu_reader_tls_idx);
-}
-
 static struct rcu_reader_data *rcu_reader_new(void)
 {
     struct rcu_reader_data *reader = g_new0(struct rcu_reader_data, 1);
