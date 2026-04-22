@@ -76,6 +76,16 @@ static inline uint32_t curr_cflags(CPUState *cpu)
 {
     uint32_t cflags = cpu->tcg_cflags;
 
+    if (likely(!cpu->singlestep_enabled)) {
+        if (likely(!qatomic_read(&one_insn_per_tb))) {
+            if (likely(!(qemu_loglevel & CPU_LOG_TB_NOCHAIN))) {
+                return cflags;
+            }
+            return cflags | CF_NO_GOTO_TB;
+        }
+        return cflags | CF_NO_GOTO_TB | 1;
+    }
+
     /*
      * Record gdb single-step.  We should be exiting the TB by raising
      * EXCP_DEBUG, but to simplify other tests, disable chaining too.
@@ -83,15 +93,7 @@ static inline uint32_t curr_cflags(CPUState *cpu)
      * For singlestep and -d nochain, suppress goto_tb so that
      * we can log -d cpu,exec after every TB.
      */
-    if (unlikely(cpu->singlestep_enabled)) {
-        cflags |= CF_NO_GOTO_TB | CF_NO_GOTO_PTR | CF_SINGLE_STEP | 1;
-    } else if (qatomic_read(&one_insn_per_tb)) {
-        cflags |= CF_NO_GOTO_TB | 1;
-    } else if (qemu_loglevel_mask(CPU_LOG_TB_NOCHAIN)) {
-        cflags |= CF_NO_GOTO_TB;
-    }
-
-    return cflags;
+    return cflags | CF_NO_GOTO_TB | CF_NO_GOTO_PTR | CF_SINGLE_STEP | 1;
 }
 
 void tb_check_watchpoint(CPUState *cpu, uintptr_t retaddr);

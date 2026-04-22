@@ -51,20 +51,20 @@ static void x86_cpu_exec_exit(CPUState *cs)
 static TCGTBCPUState x86_get_tb_cpu_state(CPUState *cs)
 {
     CPUX86State *env = cpu_env(cs);
-    uint32_t flags, cs_base;
-    vaddr pc;
-
-    flags = env->hflags |
+    uint32_t hflags = env->hflags;
+    uint32_t flags = hflags |
         (env->eflags & (IOPL_MASK | TF_MASK | RF_MASK | VM_MASK | AC_MASK));
-    if (env->hflags & HF_CS64_MASK) {
-        cs_base = 0;
-        pc = env->eip;
-    } else {
-        cs_base = env->segs[R_CS].base;
-        pc = (uint32_t)(cs_base + env->eip);
+
+    if (unlikely(hflags & HF_CS64_MASK)) {
+        return (TCGTBCPUState){ .pc = env->eip, .flags = flags, .cs_base = 0 };
     }
 
-    return (TCGTBCPUState){ .pc = pc, .flags = flags, .cs_base = cs_base };
+    uint32_t cs_base = env->segs[R_CS].base;
+    return (TCGTBCPUState){
+        .pc = (uint32_t)(cs_base + env->eip),
+        .flags = flags,
+        .cs_base = cs_base,
+    };
 }
 
 static void x86_cpu_synchronize_from_tb(CPUState *cs,
