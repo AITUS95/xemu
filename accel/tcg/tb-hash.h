@@ -65,9 +65,6 @@ static inline
 uint32_t tb_hash_func(tb_page_addr_t phys_pc, vaddr pc,
                       uint32_t flags, uint64_t flags2, uint32_t cf_mask)
 {
-    if (cf_mask & CF_PCREL) {
-        return qemu_xxhash6(phys_pc, flags2, flags, cf_mask);
-    }
     return qemu_xxhash8(phys_pc, pc, flags2, flags, cf_mask);
 }
 

@@ -229,16 +229,17 @@ static inline uint64_t tb_jmp_cache_state_tag(uint32_t flags, uint32_t cflags)
 }
 
 static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
-                                                    TCGTBCPUState s,
+                                                    vaddr pc,
+                                                    uint64_t cs_base,
+                                                    uint64_t state_tag,
                                                     uint32_t hash)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
-    if (unlikely(jce->pc != s.pc ||
-                 jce->cs_base != s.cs_base ||
-                 jce->state_tag != tb_jmp_cache_state_tag(s.flags,
-                                                          s.cflags))) {
+    if (unlikely(jce->pc != pc ||
+                 jce->cs_base != cs_base ||
+                 jce->state_tag != state_tag)) {
         return NULL;
     }
 
@@ -250,15 +251,31 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
 }
 
 static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
-                                      TCGTBCPUState s, TranslationBlock *tb)
+                                      vaddr pc, uint64_t cs_base,
+                                      uint64_t state_tag,
+                                      TranslationBlock *tb)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
-    jce->pc = s.pc;
-    jce->cs_base = s.cs_base;
-    jce->state_tag = tb_jmp_cache_state_tag(s.flags, s.cflags);
+    jce->pc = pc;
+    jce->cs_base = cs_base;
+    jce->state_tag = state_tag;
     qatomic_set(&jce->tb, tb);
+}
+
+static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
+                                               uint32_t hash,
+                                               uint64_t state_tag)
+{
+    TranslationBlock *tb = tb_htable_lookup(cpu, s);
+
+    if (tb == NULL) {
+        return NULL;
+    }
+
+    tb_jmp_cache_store(cpu, hash, s.pc, s.cs_base, state_tag, tb);
+    return tb;
 }
 
 static bool inv_tb_lookup_cmp(const void *p, const void *d)
@@ -293,22 +310,22 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 {
     TranslationBlock *tb;
     uint32_t hash;
+    uint64_t state_tag;
 
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(s.cflags & CF_INVALID));
 
     hash = tb_jmp_cache_hash_func(s.pc);
-    tb = tb_jmp_cache_lookup(cpu, s, hash);
+    state_tag = tb_jmp_cache_state_tag(s.flags, s.cflags);
+    tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
     if (likely(tb)) {
         goto hit;
     }
 
-    tb = tb_htable_lookup(cpu, s);
-    if (tb == NULL) {
+    tb = tb_lookup_slow(cpu, s, hash, state_tag);
+    if (unlikely(tb == NULL)) {
         return NULL;
     }
-
-    tb_jmp_cache_store(cpu, hash, s, tb);
 
 hit:
     /*
@@ -449,9 +466,17 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
         cpu_loop_exit(cpu);
     }
 
-    tb = tb_lookup(cpu, s);
-    if (tb == NULL) {
-        return tcg_code_gen_epilogue;
+    {
+        uint32_t hash = tb_jmp_cache_hash_func(s.pc);
+        uint64_t state_tag = tb_jmp_cache_state_tag(s.flags, s.cflags);
+
+        tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
+        if (unlikely(tb == NULL)) {
+            tb = tb_lookup_slow(cpu, s, hash, state_tag);
+            if (tb == NULL) {
+                return tcg_code_gen_epilogue;
+            }
+        }
     }
 
     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
@@ -1033,7 +1058,9 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * for the fast lookup
                  */
                 h = tb_jmp_cache_hash_func(s.pc);
-                tb_jmp_cache_store(cpu, h, s, tb);
+                tb_jmp_cache_store(cpu, h, s.pc, s.cs_base,
+                                   tb_jmp_cache_state_tag(s.flags, s.cflags),
+                                   tb);
             }
 
 #ifndef CONFIG_USER_ONLY
