@@ -1205,7 +1205,8 @@ struct FlatView {
     MemoryRegion *root;
 };
 
-static inline FlatView *address_space_to_flatview(AddressSpace *as)
+static inline __attribute__((always_inline))
+FlatView *address_space_to_flatview(AddressSpace *as)
 {
     return qatomic_rcu_read(&as->current_map);
 }
@@ -3159,7 +3160,8 @@ MemTxResult address_space_write_cached_slow(MemoryRegionCache *cache,
 int memory_access_size(MemoryRegion *mr, unsigned l, hwaddr addr);
 bool prepare_mmio_access(MemoryRegion *mr);
 
-static inline bool memory_region_supports_direct_access(MemoryRegion *mr)
+static inline __attribute__((always_inline))
+bool memory_region_supports_direct_access(MemoryRegion *mr)
 {
     /* ROM DEVICE regions only allow direct access if in ROMD mode. */
     if (memory_region_is_romd(mr)) {
@@ -3176,8 +3178,9 @@ static inline bool memory_region_supports_direct_access(MemoryRegion *mr)
     return !memory_region_is_ram_device(mr);
 }
 
-static inline bool memory_access_is_direct(MemoryRegion *mr, bool is_write,
-                                           MemTxAttrs attrs)
+static inline __attribute__((always_inline))
+bool memory_access_is_direct(MemoryRegion *mr, bool is_write,
+                             MemTxAttrs attrs)
 {
     if (!memory_region_supports_direct_access(mr)) {
         return false;

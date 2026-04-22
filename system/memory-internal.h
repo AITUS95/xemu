@@ -15,12 +15,14 @@
 #define MEMORY_INTERNAL_H
 
 #ifndef CONFIG_USER_ONLY
-static inline AddressSpaceDispatch *flatview_to_dispatch(FlatView *fv)
+static inline __attribute__((always_inline))
+AddressSpaceDispatch *flatview_to_dispatch(FlatView *fv)
 {
     return fv->dispatch;
 }
 
-static inline AddressSpaceDispatch *address_space_to_dispatch(AddressSpace *as)
+static inline __attribute__((always_inline))
+AddressSpaceDispatch *address_space_to_dispatch(AddressSpace *as)
 {
     return qatomic_rcu_read((void **)&as->dispatch);
 }
