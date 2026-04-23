@@ -51,22 +51,18 @@ static void x86_cpu_exec_exit(CPUState *cs)
 static TCGTBCPUState x86_get_tb_cpu_state(CPUState *cs)
 {
     CPUX86State *env = cpu_env(cs);
+    /* TCG keeps mirrored eflags bits synchronized in hflags. */
     uint32_t hflags = env->hflags;
-    /*
-     * hflags already mirrors TF/VM/IOPL in the same bit positions.
-     * Only RF and AC still need to be merged from eflags here.
-     */
-    uint32_t flags = hflags | (env->eflags & (RF_MASK | AC_MASK));
     vaddr pc = env->eip;
 
     if (unlikely(hflags & HF_CS64_MASK)) {
-        return (TCGTBCPUState){ .pc = pc, .flags = flags, .cs_base = 0 };
+        return (TCGTBCPUState){ .pc = pc, .flags = hflags, .cs_base = 0 };
     }
 
     uint32_t cs_base = env->segs[R_CS].base;
     return (TCGTBCPUState){
         .pc = (uint32_t)(cs_base + pc),
-        .flags = flags,
+        .flags = hflags,
         .cs_base = cs_base,
     };
 }
@@ -124,7 +120,7 @@ int x86_mmu_index_pl(CPUX86State *env, unsigned pl)
     int mmu_index_base =
         pl == 3 ? MMU_USER64_IDX :
         !(env->hflags & HF_SMAP_MASK) ? MMU_KNOSMAP64_IDX :
-        (env->eflags & AC_MASK) ? MMU_KNOSMAP64_IDX : MMU_KSMAP64_IDX;
+        (env->hflags & HF_AC_MASK) ? MMU_KNOSMAP64_IDX : MMU_KSMAP64_IDX;
 
     return mmu_index_base + mmu_index_32;
 }
@@ -142,7 +138,7 @@ static bool x86_debug_check_breakpoint(CPUState *cs)
     CPUX86State *env = &cpu->env;
 
     /* RF disables all architectural breakpoints. */
-    return !(env->eflags & RF_MASK);
+    return !(env->hflags & HF_RF_MASK);
 }
 
 static void x86_cpu_exec_reset(CPUState *cs)

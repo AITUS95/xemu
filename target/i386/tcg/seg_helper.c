@@ -878,6 +878,7 @@ static void do_interrupt_protected(CPUX86State *env, int intno, int is_int,
         env->eflags &= ~IF_MASK;
     }
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK);
+    x86_sync_hflags_from_eflags(env, TF_MASK | VM_MASK | RF_MASK);
 
     if (new_stack) {
         if (vm86) {
@@ -1066,6 +1067,7 @@ static void do_interrupt64(CPUX86State *env, int intno, int is_int,
         env->eflags &= ~IF_MASK;
     }
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK);
+    x86_sync_hflags_from_eflags(env, TF_MASK | VM_MASK | RF_MASK);
 
     if (new_stack) {
         uint32_t ss = 0 | dpl; /* SS = NULL selector with RPL = new CPL */
@@ -1182,6 +1184,7 @@ static void do_interrupt_real(CPUX86State *env, int intno, int is_int,
     env->segs[R_CS].selector = selector;
     env->segs[R_CS].base = (selector << 4);
     env->eflags &= ~(IF_MASK | TF_MASK | AC_MASK | RF_MASK);
+    x86_sync_hflags_from_eflags(env, TF_MASK | AC_MASK | RF_MASK);
 }
 
 /*
@@ -2289,6 +2292,7 @@ void helper_sysenter(CPUX86State *env)
         raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
     }
     env->eflags &= ~(VM_MASK | IF_MASK | RF_MASK);
+    x86_sync_hflags_from_eflags(env, VM_MASK | RF_MASK);
 
 #ifdef TARGET_X86_64
     if (env->hflags & HF_LMA_MASK) {

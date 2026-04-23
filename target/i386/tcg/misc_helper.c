@@ -35,6 +35,7 @@ void cpu_load_eflags(CPUX86State *env, int eflags, int update_mask)
     env->df = 1 - (2 * ((eflags >> 10) & 1));
     env->eflags = (env->eflags & ~update_mask) |
         (eflags & update_mask) | 0x2;
+    x86_sync_hflags_from_eflags(env, update_mask);
 }
 
 void helper_into(CPUX86State *env, int next_eip_addend)

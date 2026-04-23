@@ -844,19 +844,39 @@ static void gen_reset_hflag(DisasContext *s, uint32_t mask)
 static void gen_set_eflags(DisasContext *s, target_ulong mask)
 {
     TCGv t = tcg_temp_new();
+    uint32_t hmask = mask & (HF_TF_MASK | HF_IOPL_MASK | HF_RF_MASK |
+                             HF_VM_MASK | HF_AC_MASK);
 
     tcg_gen_ld_tl(t, tcg_env, offsetof(CPUX86State, eflags));
     tcg_gen_ori_tl(t, t, mask);
     tcg_gen_st_tl(t, tcg_env, offsetof(CPUX86State, eflags));
+
+    if (hmask) {
+        TCGv_i32 h = tcg_temp_new_i32();
+
+        tcg_gen_ld_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+        tcg_gen_ori_i32(h, h, hmask);
+        tcg_gen_st_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+    }
 }
 
 static void gen_reset_eflags(DisasContext *s, target_ulong mask)
 {
     TCGv t = tcg_temp_new();
+    uint32_t hmask = mask & (HF_TF_MASK | HF_IOPL_MASK | HF_RF_MASK |
+                             HF_VM_MASK | HF_AC_MASK);
 
     tcg_gen_ld_tl(t, tcg_env, offsetof(CPUX86State, eflags));
     tcg_gen_andi_tl(t, t, ~mask);
     tcg_gen_st_tl(t, tcg_env, offsetof(CPUX86State, eflags));
+
+    if (hmask) {
+        TCGv_i32 h = tcg_temp_new_i32();
+
+        tcg_gen_ld_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+        tcg_gen_andi_i32(h, h, ~hmask);
+        tcg_gen_st_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+    }
 }
 
 static void gen_helper_in_func(MemOp ot, TCGv v, TCGv_i32 n)
