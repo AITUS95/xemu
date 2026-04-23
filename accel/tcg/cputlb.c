@@ -1442,6 +1442,18 @@ static int probe_access_internal(CPUState *cpu, vaddr addr,
     flags &= tlb_addr;
 
     *pfull = full = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
+
+    if (likely(!(tlb_addr & TLB_FORCE_SLOW))) {
+        if (unlikely(access_type != MMU_INST_FETCH && force_mmio)) {
+            *phost = NULL;
+            return TLB_MMIO;
+        }
+
+        /* The common RAM path does not need to touch slow_flags at all. */
+        *phost = (void *)((uintptr_t)addr + entry->addend);
+        return flags;
+    }
+
     flags |= full->slow_flags[access_type];
 
     /* Fold all "mmio-like" bits into TLB_MMIO.  This is not RAM.  */
