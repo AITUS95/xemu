@@ -4016,10 +4016,32 @@ void cpu_physical_memory_unmap(void *buffer, hwaddr len,
     return address_space_unmap(&address_space_memory, buffer, len, is_write, access_len);
 }
 
+static inline __attribute__((always_inline))
+MemoryRegion *address_space_translate_rcu(AddressSpace *as, hwaddr addr,
+                                          hwaddr *xlat, hwaddr *plen,
+                                          bool is_write, MemTxAttrs attrs)
+{
+    MemoryRegionSection section;
+    AddressSpace *target_as = NULL;
+    MemoryRegion *mr;
+
+    section = address_space_do_translate(address_space_to_dispatch(as), addr,
+                                         xlat, plen, NULL, is_write, true,
+                                         &target_as, attrs);
+    mr = section.mr;
+
+    if (xen_enabled() && memory_access_is_direct(mr, is_write, attrs)) {
+        hwaddr page = ((addr & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE) - addr;
+        *plen = MIN(page, *plen);
+    }
+
+    return mr;
+}
+
 #define ARG1_DECL                AddressSpace *as
 #define ARG1                     as
 #define SUFFIX
-#define TRANSLATE(...)           address_space_translate(as, __VA_ARGS__)
+#define TRANSLATE(...)           address_space_translate_rcu(as, __VA_ARGS__)
 #define RCU_READ_LOCK(...)                                               \
     struct rcu_reader_data *qemu_rcu_reader_local = rcu_read_lock_ptr()
 #define RCU_READ_UNLOCK(...)     rcu_read_unlock_ptr(qemu_rcu_reader_local)
