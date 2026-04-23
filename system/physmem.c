@@ -4013,8 +4013,9 @@ void cpu_physical_memory_unmap(void *buffer, hwaddr len,
 #define ARG1                     as
 #define SUFFIX
 #define TRANSLATE(...)           address_space_translate(as, __VA_ARGS__)
-#define RCU_READ_LOCK(...)       rcu_read_lock()
-#define RCU_READ_UNLOCK(...)     rcu_read_unlock()
+#define RCU_READ_LOCK(...)                                               \
+    struct rcu_reader_data *qemu_rcu_reader_local = rcu_read_lock_ptr()
+#define RCU_READ_UNLOCK(...)     rcu_read_unlock_ptr(qemu_rcu_reader_local)
 #include "memory_ldst.c.inc"
 
 int64_t address_space_cache_init(MemoryRegionCache *cache,

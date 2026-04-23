@@ -105,13 +105,14 @@ struct rcu_reader_data *get_ptr_rcu_reader(void)
 QEMU_DECLARE_CO_TLS(struct rcu_reader_data, rcu_reader)
 #endif
 
-static inline __attribute__((always_inline)) void rcu_read_lock(void)
+static inline __attribute__((always_inline))
+struct rcu_reader_data *rcu_read_lock_ptr(void)
 {
     struct rcu_reader_data *p_rcu_reader = get_ptr_rcu_reader();
     unsigned ctr;
 
     if (p_rcu_reader->depth++ > 0) {
-        return;
+        return p_rcu_reader;
     }
 
     ctr = qatomic_read(&rcu_gp_ctr);
@@ -122,12 +123,12 @@ static inline __attribute__((always_inline)) void rcu_read_lock(void)
      * RCU-protected pointers.
      */
     smp_mb_placeholder();
+    return p_rcu_reader;
 }
 
-static inline __attribute__((always_inline)) void rcu_read_unlock(void)
+static inline __attribute__((always_inline))
+void rcu_read_unlock_ptr(struct rcu_reader_data *p_rcu_reader)
 {
-    struct rcu_reader_data *p_rcu_reader = get_ptr_rcu_reader();
-
     assert(p_rcu_reader->depth != 0);
     if (--p_rcu_reader->depth > 0) {
         return;
@@ -146,6 +147,16 @@ static inline __attribute__((always_inline)) void rcu_read_unlock(void)
         qatomic_set(&p_rcu_reader->waiting, false);
         qemu_event_set(&rcu_gp_event);
     }
+}
+
+static inline __attribute__((always_inline)) void rcu_read_lock(void)
+{
+    rcu_read_lock_ptr();
+}
+
+static inline __attribute__((always_inline)) void rcu_read_unlock(void)
+{
+    rcu_read_unlock_ptr(get_ptr_rcu_reader());
 }
 
 void synchronize_rcu(void);
