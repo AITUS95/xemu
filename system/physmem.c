@@ -1023,6 +1023,13 @@ found:
     return block;
 }
 
+static inline __attribute__((always_inline))
+bool ram_block_covers_host(const RAMBlock *block, const uint8_t *host)
+{
+    return block && block->host &&
+           (uintptr_t)host - (uintptr_t)block->host < block->max_length;
+}
+
 void tlb_reset_dirty_range_all(ram_addr_t start, ram_addr_t length)
 {
     CPUState *cpu;
@@ -2895,9 +2902,10 @@ void qemu_ram_remap(ram_addr_t addr)
  *
  * Called within RCU critical section.
  */
-static void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
-                                 hwaddr *size, bool lock,
-                                 bool is_write)
+static inline __attribute__((always_inline))
+void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
+                          hwaddr *size, bool lock,
+                          bool is_write)
 {
     hwaddr len = 0;
 
@@ -2914,22 +2922,22 @@ static void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
         len = *size;
     }
 
-    if (xen_enabled() && block->host == NULL) {
-        /* We need to check if the requested address is in the RAM
-         * because we don't want to map the entire memory in QEMU.
-         * In that case just map the requested area.
-         */
-        if (xen_mr_is_memory(block->mr)) {
-            return xen_map_cache(block->mr, block->offset + addr,
-                                 len, block->offset,
-                                 lock, lock, is_write);
-        }
-
-        block->host = xen_map_cache(block->mr, block->offset,
-                                    block->max_length,
-                                    block->offset,
-                                    1, lock, is_write);
+    if (likely(!xen_enabled() || block->host != NULL)) {
+        assert(offset_in_ramblock(block, addr));
+        return (uint8_t *)block->host + addr;
     }
+
+    /* Xen foreign mappings are the uncommon case. */
+    if (xen_mr_is_memory(block->mr)) {
+        return xen_map_cache(block->mr, block->offset + addr,
+                             len, block->offset,
+                             lock, lock, is_write);
+    }
+
+    block->host = xen_map_cache(block->mr, block->offset,
+                                block->max_length,
+                                block->offset,
+                                1, lock, is_write);
 
     return ramblock_ptr(block, addr);
 }
@@ -2980,16 +2988,12 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
 
     RCU_READ_LOCK_GUARD();
     block = qatomic_rcu_read(&ram_list.mru_block);
-    if (block && block->host && host - block->host < block->max_length) {
+    if (ram_block_covers_host(block, host)) {
         goto found;
     }
 
     RAMBLOCK_FOREACH(block) {
-        /* This case append when the block is not mapped. */
-        if (block->host == NULL) {
-            continue;
-        }
-        if (host - block->host < block->max_length) {
+        if (ram_block_covers_host(block, host)) {
             goto found;
         }
     }
@@ -2997,7 +3001,8 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
     return NULL;
 
 found:
-    *offset = (host - block->host);
+    ram_list.mru_block = block;
+    *offset = (uintptr_t)host - (uintptr_t)block->host;
     if (round_offset) {
         *offset &= TARGET_PAGE_MASK;
     }
