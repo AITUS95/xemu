@@ -36,14 +36,16 @@
 #define TB_JMP_ADDR_MASK (TB_JMP_PAGE_SIZE - 1)
 #define TB_JMP_PAGE_MASK (TB_JMP_CACHE_SIZE - TB_JMP_PAGE_SIZE)
 
-static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_page(vaddr pc)
 {
     vaddr tmp;
     tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
     return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
 }
 
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
     vaddr tmp;
     tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
@@ -54,14 +56,15 @@ static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
 #else
 
 /* In user-mode we can get better hashing because we do not have a TLB */
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
     return (pc ^ (pc >> TB_JMP_CACHE_BITS)) & (TB_JMP_CACHE_SIZE - 1);
 }
 
 #endif /* CONFIG_SOFTMMU */
 
-static inline
+static inline __attribute__((always_inline))
 uint32_t tb_hash_func(tb_page_addr_t phys_pc, vaddr pc,
                       uint32_t flags, uint64_t flags2, uint32_t cf_mask)
 {

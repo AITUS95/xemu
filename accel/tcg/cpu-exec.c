@@ -198,7 +198,7 @@ static bool tb_lookup_cmp(const void *p, const void *d)
     return false;
 }
 
-static TranslationBlock *
+static inline __attribute__((always_inline)) TranslationBlock *
 tb_htable_lookup_common(CPUState *cpu, TCGTBCPUState s, const struct qht *ht,
                         qht_lookup_func_t func)
 {
