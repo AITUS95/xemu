@@ -68,7 +68,9 @@ static inline __attribute__((always_inline))
 uint32_t tb_hash_func(tb_page_addr_t phys_pc, vaddr pc,
                       uint32_t flags, uint64_t flags2, uint32_t cf_mask)
 {
-    return qemu_xxhash8(phys_pc, pc, flags2, flags, cf_mask);
+    uint64_t h64 = qemu_xxhash64_4(phys_pc, pc, flags2,
+                                   flags | ((uint64_t)cf_mask << 32));
+    return h64 ^ (h64 >> 32);
 }
 
 #endif
