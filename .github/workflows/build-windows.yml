@@ -116,13 +116,9 @@ jobs:
             --extra-cflags="-gdwarf-4 -g1 -femit-struct-debug-reduced"
           )
 
-          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-            opts+=(
-              --extra-cflags="-flto-incremental=${LTO_CACHE_DIR} -flto-partition=cache"
-              -Db_lto=true
-            )
-            mkdir -p ${LTO_CACHE_DIR}
-          elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
+          # Keep release-with-PDB builds off LTO: cv2pdb is unstable on the
+          # resulting DWARF and the symbols are less useful for VTune anyway.
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
             # FIXME: llvm-mingw ThinLTO has an issue with `qemu_build_not_reached_always`
             #        being intentionaly undefined (to ensure 'unreachable' paths are
             #        optimized out). Regular LTO doesn't pass cv2pdb. Resolve linking
