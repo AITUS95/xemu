@@ -2452,6 +2452,7 @@ static void ram_block_add(RAMBlock *new_block, Error **errp)
         QLIST_INSERT_HEAD_RCU(&ram_list.blocks, new_block, next);
     }
     ram_list.mru_block = NULL;
+    ram_list.host_mru_block = NULL;
 
     /* Write list before version */
     smp_wmb();
@@ -2800,6 +2801,7 @@ void qemu_ram_free(RAMBlock *block)
     cpr_delete_fd(name, 0);
     QLIST_REMOVE_RCU(block, next);
     ram_list.mru_block = NULL;
+    ram_list.host_mru_block = NULL;
     /* Write list before version */
     smp_wmb();
     ram_list.version++;
@@ -2987,7 +2989,7 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
     }
 
     RCU_READ_LOCK_GUARD();
-    block = qatomic_rcu_read(&ram_list.mru_block);
+    block = qatomic_rcu_read(&ram_list.host_mru_block);
     if (ram_block_covers_host(block, host)) {
         goto found;
     }
@@ -3001,7 +3003,7 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
     return NULL;
 
 found:
-    ram_list.mru_block = block;
+    ram_list.host_mru_block = block;
     *offset = (uintptr_t)host - (uintptr_t)block->host;
     if (round_offset) {
         *offset &= TARGET_PAGE_MASK;
