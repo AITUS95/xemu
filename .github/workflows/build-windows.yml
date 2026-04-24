@@ -109,18 +109,26 @@ jobs:
           opts=(
             --debug
           )
-        elif [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+        else
           opts=(
-            --extra-cflags="-flto-incremental=${LTO_CACHE_DIR} -flto-partition=cache"
-            -Db_lto=true
+            --enable-debug-info
+            --disable-strip
+            --extra-cflags="-gdwarf-4 -g3 -femit-struct-debug-reduced"
           )
-          mkdir -p ${LTO_CACHE_DIR}
-        elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
-          # FIXME: llvm-mingw ThinLTO has an issue with `qemu_build_not_reached_always`
-          #        being intentionaly undefined (to ensure 'unreachable' paths are
-          #        optimized out). Regular LTO doesn't pass cv2pdb. Resolve linking
-          #        failure and have llvm toolchain generate PDB directly.
-          opts=()
+
+          if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+            opts+=(
+              --extra-cflags="-flto-incremental=${LTO_CACHE_DIR} -flto-partition=cache"
+              -Db_lto=true
+            )
+            mkdir -p ${LTO_CACHE_DIR}
+          elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            # FIXME: llvm-mingw ThinLTO has an issue with `qemu_build_not_reached_always`
+            #        being intentionaly undefined (to ensure 'unreachable' paths are
+            #        optimized out). Regular LTO doesn't pass cv2pdb. Resolve linking
+            #        failure and have llvm toolchain generate PDB directly.
+            :
+          fi
         fi
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Compile
