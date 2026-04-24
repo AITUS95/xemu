@@ -44,7 +44,7 @@ function Invoke-LoggedCommand {
 
     Write-Host ">> $FilePath $($Arguments -join ' ')"
     & $FilePath @Arguments
-    return $LASTEXITCODE
+    $script:LastCommandExitCode = $LASTEXITCODE
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -119,7 +119,8 @@ $configureCommand = @(
 
 Push-Location $buildPath
 try {
-    $configureExit = Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $configureCommand)
+    Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $configureCommand)
+    $configureExit = $script:LastCommandExitCode
 } finally {
     Pop-Location
 }

@@ -980,7 +980,7 @@ $mkvenv ensuregroup --dir "${source_path}/python/wheels" \
      ${source_path}/pythondeps.toml meson || exit 1
 
 # At this point, we expect Meson to be installed and available.
-# We expect mkvenv or pip to have created pyvenv/bin/meson for us.
+# We expect mkvenv or pip to have created a venv script directory for us.
 # We ignore PATH completely here: we want to use the venv's Meson
 # *exclusively*.
 
@@ -993,7 +993,15 @@ get_pwd() {
     fi
 }
 
-meson="$(cd pyvenv/bin; get_pwd)/meson"
+if test -d pyvenv/bin; then
+    pyvenv_bin=pyvenv/bin
+elif test -d pyvenv/Scripts; then
+    pyvenv_bin=pyvenv/Scripts
+else
+    error_exit "Cannot find Python virtual environment scripts directory"
+fi
+
+meson="$(cd "$pyvenv_bin"; get_pwd)/meson"
 if [ -f "$meson$EXESUF" ]; then
   meson="$meson$EXESUF"
 fi
