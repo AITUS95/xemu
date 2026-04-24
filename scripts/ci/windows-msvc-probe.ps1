@@ -104,7 +104,7 @@ $env:VCPKG_ROOT = $vcpkgRoot
 if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     $env:VCPKG_BINARY_SOURCES = "clear;x-gha,readwrite"
 }
-$vcpkgPackages = @("pkgconf", "glib", "pixman") | ForEach-Object { "${_}:$VcpkgTriplet" }
+$vcpkgPackages = @("pkgconf", "glib", "pixman", "libepoxy") | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
 if ($script:LastCommandExitCode -ne 0) {
