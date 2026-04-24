@@ -134,7 +134,7 @@ $configureCommand = @(
     "export RANLIB=:",
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
-    "export PATH=`$PWD:${msvcBinBash}:${sdkBinBash}:`$PATH",
+    "export PATH=`"`$PWD:${msvcBinBash}:${sdkBinBash}:`$PATH`"",
     "command -v cl",
     "command -v link",
     "command -v msvc-cl.cmd",
