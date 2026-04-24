@@ -1,6 +1,18 @@
 name: Build for Windows (MSVC probe)
 
 on:
+  push:
+    branches:
+      - MSVC
+    paths:
+      - ".github/workflows/build-windows-msvc.yml"
+      - "scripts/ci/msvc-cl.cmd"
+      - "scripts/ci/msvc-cl-wrapper.py"
+      - "scripts/ci/windows-msvc-probe.ps1"
+      - "configure"
+      - "meson.build"
+      - "include/qemu/**"
+      - "include/system/os-win32.h"
   workflow_dispatch:
     inputs:
       strict:
@@ -41,8 +53,8 @@ jobs:
       - name: Run MSVC configure probe
         shell: pwsh
         env:
-          STRICT: ${{ inputs.strict }}
-          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args }}
+          STRICT: ${{ inputs.strict || 'false' }}
+          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
         run: |
           $strict = [System.Convert]::ToBoolean($env:STRICT)
           .\scripts\ci\windows-msvc-probe.ps1 `
