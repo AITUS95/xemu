@@ -1108,10 +1108,16 @@ endif
 
 if not cc.compiles('''
   #include <glib.h>
+  #ifdef _MSC_VER
+  #include <stddef.h>
+  #define QEMU_BUILD_BUG_ON(x) \
+  typedef char qemu_build_bug_on[(x)?-1:1];
+  #else
   #include <unistd.h>
 
   #define QEMU_BUILD_BUG_ON(x) \
   typedef char qemu_build_bug_on[(x)?-1:1] __attribute__((unused));
+  #endif
 
   int main(void) {
      QEMU_BUILD_BUG_ON(sizeof(size_t) != GLIB_SIZEOF_SIZE_T);
