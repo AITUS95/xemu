@@ -109,7 +109,7 @@ def main():
     compiler = sys.argv[1]
     args = sys.argv[2:]
 
-    if args in (["--version"], ["-v"]):
+    if "--version" in args or "-v" in args:
         subprocess.run([compiler, "/Bv"], check=False)
         return 0
 
