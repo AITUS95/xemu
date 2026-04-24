@@ -1159,6 +1159,9 @@ fi
 
 ##########################################
 # big/little endian test
+if test "$host_os" = "windows"; then
+  bigendian="no"
+else
 cat > $TMPC << EOF
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 # error LITTLE
@@ -1182,6 +1185,7 @@ EOF
     echo big/little test failed
     exit 1
   fi
+fi
 fi
 
 ##########################################
