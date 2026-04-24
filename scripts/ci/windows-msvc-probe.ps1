@@ -46,6 +46,12 @@ function ConvertTo-GitBashPath {
     return "/$drive$path"
 }
 
+function ConvertTo-WindowsSlashPath {
+    param([string]$WindowsPath)
+
+    return (Resolve-Path $WindowsPath).Path.Replace("\", "/")
+}
+
 function Find-Vcpkg {
     $candidates = @(
         $env:VCPKG_INSTALLATION_ROOT,
@@ -127,8 +133,8 @@ $msvcBinBash = ConvertTo-GitBashPath $msvcBin
 $sdkBinBash = ConvertTo-GitBashPath $sdkBin
 $vcpkgBinBash = ConvertTo-GitBashPath $vcpkgBin
 $pkgconfBinBash = ConvertTo-GitBashPath $pkgconfBin
-$pkgConfigBash = ConvertTo-GitBashPath $pkgConfig
-$pkgConfigLibdirBash = ($pkgConfigDirs | ForEach-Object { ConvertTo-GitBashPath $_ }) -join ":"
+$pkgConfigMeson = ConvertTo-WindowsSlashPath $pkgConfig
+$pkgConfigLibdirMeson = ($pkgConfigDirs | ForEach-Object { ConvertTo-WindowsSlashPath $_ }) -join ";"
 $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
 cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
@@ -188,9 +194,9 @@ $configureCommand = @(
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
     "export PATH=`"${probePathBash}`"",
-    "export PKG_CONFIG=`"${pkgConfigBash}`"",
-    "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirBash}`"",
-    "export PKG_CONFIG_PATH=`"${pkgConfigLibdirBash}`"",
+    "export PKG_CONFIG=`"${pkgConfigMeson}`"",
+    "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",
+    "export PKG_CONFIG_PATH=`"${pkgConfigLibdirMeson}`"",
     "command -v cl",
     "command -v link",
     "command -v pkgconf",
