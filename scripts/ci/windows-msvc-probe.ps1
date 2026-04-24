@@ -97,6 +97,12 @@ $configureArgs = @(
     "-Db_lto=false"
 )
 
+$configureLine = $configureArgs -join " "
+if ($ExtraConfigureArgs) {
+    $configureLine += " $ExtraConfigureArgs"
+}
+$configureLine += " 2>&1 | tee ../msvc-probe-logs/configure-output.log"
+
 $configureCommand = @(
     "set -o pipefail",
     "export AR=lib",
@@ -108,7 +114,7 @@ $configureCommand = @(
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
     "command -v cl",
-    ($configureArgs -join " ") + $(if ($ExtraConfigureArgs) { " $ExtraConfigureArgs" } else { "" }) + " 2>&1 | tee ../msvc-probe-logs/configure-output.log"
+    $configureLine
 ) -join "; "
 
 Push-Location $buildPath
@@ -133,3 +139,5 @@ if ($configureExit -ne 0) {
         exit $configureExit
     }
 }
+
+exit 0
