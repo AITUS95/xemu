@@ -1,0 +1,63 @@
+name: Build for Windows (MSVC probe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: Fail the workflow when the MSVC probe fails
+        required: false
+        type: boolean
+        default: false
+      configure_args:
+        description: Extra arguments appended to configure
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    name: Configure with MSVC (${{ matrix.arch }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            vc_arch: amd64
+            qemu_cpu: x86_64
+    steps:
+      - name: Clone tree
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Run MSVC configure probe
+        shell: pwsh
+        env:
+          STRICT: ${{ inputs.strict }}
+          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args }}
+        run: |
+          $strict = [System.Convert]::ToBoolean($env:STRICT)
+          .\scripts\ci\windows-msvc-probe.ps1 `
+            -Architecture "${{ matrix.vc_arch }}" `
+            -QemuCpu "${{ matrix.qemu_cpu }}" `
+            -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
+            -Strict:$strict
+
+      - name: Upload MSVC probe logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: msvc-probe-${{ matrix.arch }}
+          path: |
+            msvc-probe-logs
+            build-msvc/config.log
+            build-msvc/meson-logs
+          if-no-files-found: warn

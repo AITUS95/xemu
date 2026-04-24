@@ -367,22 +367,26 @@ foreach lang : all_languages
       # endif
       #endif''')
     # ok
+  elif compiler.get_id() == 'msvc' and compiler.version().version_compare('>=19.30')
+    # ok
   elif compiler.get_id() == 'emscripten'
     # ok
   else
-    error('You either need GCC v7.4 or Clang v10.0 (or XCode Clang v15.0) to compile QEMU')
+    error('You either need GCC v7.4, Clang v10.0 (or XCode Clang v15.0), or MSVC v19.30 to compile QEMU')
   endif
 endforeach
 
 # default flags for all hosts
-# We use -fwrapv to tell the compiler that we require a C dialect where
-# left shift of signed integers is well defined and has the expected
-# 2s-complement style results. (Both clang and gcc agree that it
+# For GNU-like compilers we use -fwrapv to tell the compiler that we require a
+# C dialect where left shift of signed integers is well defined and has the
+# expected 2s-complement style results. (Both clang and gcc agree that it
 # provides these semantics.)
 
 qemu_common_flags = [
-  '-D_GNU_SOURCE', '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-common', '-fwrapv' ]
+  '-D_GNU_SOURCE', '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE' ]
+if cc.get_id() != 'msvc'
+  qemu_common_flags += ['-fno-strict-aliasing', '-fno-common', '-fwrapv']
+endif
 qemu_cflags = []
 qemu_ldflags = []
 
@@ -435,33 +439,39 @@ if host_arch in ['i386', 'x86_64']
     error('x86_64-v1 required for x86-64 hosts')
   endif
 
-  # add flags for individual instruction set extensions
-  if get_option('x86_version') >= '1'
-    if host_arch == 'i386'
-      qemu_common_flags = ['-mfpmath=sse'] + qemu_common_flags
-    else
-      # present on basically all processors but technically not part of
-      # x86-64-v1, so only include -mneeded for x86-64 version 2 and above
-      qemu_isa_flags += ['-mcx16']
+  if cc.get_id() == 'msvc'
+    if get_option('x86_version') not in ['0', '1']
+      warning('x86_version tuning is not implemented for MSVC; relying on compiler defaults')
     endif
-  endif
-  if get_option('x86_version') >= '2'
-    qemu_isa_flags += ['-mpopcnt']
-    qemu_isa_flags += cc.get_supported_arguments('-mneeded')
-  endif
-  if get_option('x86_version') >= '3'
-    qemu_isa_flags += ['-mmovbe', '-mabm', '-mbmi', '-mbmi2', '-mfma', '-mf16c']
-  endif
+  else
+    # add flags for individual instruction set extensions
+    if get_option('x86_version') >= '1'
+      if host_arch == 'i386'
+        qemu_common_flags = ['-mfpmath=sse'] + qemu_common_flags
+      else
+        # present on basically all processors but technically not part of
+        # x86-64-v1, so only include -mneeded for x86-64 version 2 and above
+        qemu_isa_flags += ['-mcx16']
+      endif
+    endif
+    if get_option('x86_version') >= '2'
+      qemu_isa_flags += ['-mpopcnt']
+      qemu_isa_flags += cc.get_supported_arguments('-mneeded')
+    endif
+    if get_option('x86_version') >= '3'
+      qemu_isa_flags += ['-mmovbe', '-mabm', '-mbmi', '-mbmi2', '-mfma', '-mf16c']
+    endif
 
-  # add required vector instruction set (each level implies those below)
-  if get_option('x86_version') == '1'
-    qemu_isa_flags += ['-msse2']
-  elif get_option('x86_version') == '2'
-    qemu_isa_flags += ['-msse4.2']
-  elif get_option('x86_version') == '3'
-    qemu_isa_flags += ['-mavx2']
-  elif get_option('x86_version') == '4'
-    qemu_isa_flags += ['-mavx512f', '-mavx512bw', '-mavx512cd', '-mavx512dq', '-mavx512vl']
+    # add required vector instruction set (each level implies those below)
+    if get_option('x86_version') == '1'
+      qemu_isa_flags += ['-msse2']
+    elif get_option('x86_version') == '2'
+      qemu_isa_flags += ['-msse4.2']
+    elif get_option('x86_version') == '3'
+      qemu_isa_flags += ['-mavx2']
+    elif get_option('x86_version') == '4'
+      qemu_isa_flags += ['-mavx512f', '-mavx512bw', '-mavx512cd', '-mavx512dq', '-mavx512vl']
+    endif
   endif
 endif
 
