@@ -81,11 +81,18 @@ if (Test-Path $buildPath) {
 New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
 
 $bash = (Get-Command bash.exe -ErrorAction Stop).Source
+$wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
+$localCompiler = Join-Path $buildPath "msvc-cl.cmd"
+@(
+    "@echo off",
+    "python `"$wrapperPy`" cl.exe %*",
+    "exit /b %ERRORLEVEL%"
+) | Set-Content -Path $localCompiler -Encoding ASCII
 
 $configureArgs = @(
     "../configure",
-    "--cc=../scripts/ci/msvc-cl.cmd",
-    "--cxx=../scripts/ci/msvc-cl.cmd",
+    "--cc=msvc-cl.cmd",
+    "--cxx=msvc-cl.cmd",
     "--cpu=$QemuCpu",
     "--target-list=i386-softmmu",
     "--without-default-features",
@@ -113,7 +120,9 @@ $configureCommand = @(
     "export RANLIB=:",
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
+    "export PATH=`$PWD:`$PATH",
     "command -v cl",
+    "command -v msvc-cl.cmd",
     $configureLine
 ) -join "; "
 
