@@ -521,6 +521,16 @@ case "$cpu" in
     ;;
 esac
 
+MESON_CPU_CFLAGS="$CPU_CFLAGS"
+cc_basename=${cc##*/}
+cc_basename=${cc_basename##*\\}
+case "$host_os:$cc_basename" in
+  windows:cl|windows:cl.exe|windows:clang-cl|windows:clang-cl.exe|\
+  windows:msvc-cl|windows:msvc-cl.cmd|windows:msvc-cl.exe)
+    MESON_CPU_CFLAGS=
+    ;;
+esac
+
 if test -n "$host_arch" && {
     ! test -d "$source_path/linux-user/include/host/$host_arch" ||
     ! test -d "$source_path/common-user/host/$host_arch"; }; then
@@ -1925,9 +1935,9 @@ if test "$skip_meson" = no; then
 
   echo >> $cross
   echo "[binaries]" >> $cross
-  echo "c = [$(meson_quote $cc $CPU_CFLAGS)]" >> $cross
-  test -n "$cxx" && echo "cpp = [$(meson_quote $cxx $CPU_CFLAGS)]" >> $cross
-  test -n "$objcc" && echo "objc = [$(meson_quote $objcc $CPU_CFLAGS)]" >> $cross
+  echo "c = [$(meson_quote $cc $MESON_CPU_CFLAGS)]" >> $cross
+  test -n "$cxx" && echo "cpp = [$(meson_quote $cxx $MESON_CPU_CFLAGS)]" >> $cross
+  test -n "$objcc" && echo "objc = [$(meson_quote $objcc $MESON_CPU_CFLAGS)]" >> $cross
   if test "$rust" != disabled; then
     if test "$rust_host_triple" != "$rust_target_triple"; then
       echo "rust = [$(meson_quote $rustc --target "$rust_target_triple")]" >> $cross
