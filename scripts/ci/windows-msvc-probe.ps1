@@ -2,6 +2,7 @@ param(
     [string]$Architecture = "amd64",
     [string]$QemuCpu = "x86_64",
     [string]$BuildDir = "build-msvc",
+    [string]$VcpkgTriplet = "x64-windows",
     [string]$ExtraConfigureArgs = "",
     [switch]$Strict
 )
@@ -45,6 +46,22 @@ function ConvertTo-GitBashPath {
     return "/$drive$path"
 }
 
+function Find-Vcpkg {
+    $candidates = @(
+        $env:VCPKG_INSTALLATION_ROOT,
+        "C:\vcpkg"
+    ) | Where-Object { $_ }
+
+    foreach ($candidate in $candidates) {
+        $vcpkg = Join-Path $candidate "vcpkg.exe"
+        if (Test-Path $vcpkg) {
+            return $vcpkg
+        }
+    }
+
+    throw "vcpkg.exe was not found"
+}
+
 function Invoke-LoggedCommand {
     param(
         [string]$FilePath,
@@ -69,15 +86,47 @@ Write-Host "Repository: $repoRoot"
 Write-Host "Build dir:  $buildPath"
 Write-Host "Arch:       $Architecture"
 Write-Host "QEMU CPU:   $QemuCpu"
+Write-Host "vcpkg:      $VcpkgTriplet"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
 
+$vcpkg = Find-Vcpkg
+$vcpkgRoot = Split-Path $vcpkg -Parent
+$vcpkgPackages = @("pkgconf", "glib", "pixman") | ForEach-Object { "${_}:$VcpkgTriplet" }
+$vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
+Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
+if ($script:LastCommandExitCode -ne 0) {
+    exit $script:LastCommandExitCode
+}
+
+$vcpkgInstalled = Join-Path $vcpkgRoot "installed\$VcpkgTriplet"
+$vcpkgBin = Join-Path $vcpkgInstalled "bin"
+$pkgconfBin = Join-Path $vcpkgInstalled "tools\pkgconf"
+$pkgConfig = Join-Path $pkgconfBin "pkgconf.exe"
+$pkgConfigDirs = @(
+    (Join-Path $vcpkgInstalled "lib\pkgconfig"),
+    (Join-Path $vcpkgInstalled "share\pkgconfig")
+)
+if (-not (Test-Path $pkgConfig)) {
+    throw "pkgconf.exe not found at $pkgConfig"
+}
+
+$env:PATH = "$pkgconfBin;$vcpkgBin;$env:PATH"
+$env:PKG_CONFIG = $pkgConfig
+$env:PKG_CONFIG_LIBDIR = $pkgConfigDirs -join ";"
+$env:PKG_CONFIG_PATH = $env:PKG_CONFIG_LIBDIR
+
 $msvcBin = Split-Path (Get-Command cl.exe -ErrorAction Stop).Source -Parent
 $sdkBin = Split-Path (Get-Command rc.exe -ErrorAction Stop).Source -Parent
 $msvcBinBash = ConvertTo-GitBashPath $msvcBin
 $sdkBinBash = ConvertTo-GitBashPath $sdkBin
+$vcpkgBinBash = ConvertTo-GitBashPath $vcpkgBin
+$pkgconfBinBash = ConvertTo-GitBashPath $pkgconfBin
+$pkgConfigBash = ConvertTo-GitBashPath $pkgConfig
+$pkgConfigLibdirBash = ($pkgConfigDirs | ForEach-Object { ConvertTo-GitBashPath $_ }) -join ":"
+$probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
 cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
 python --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "python-version.log")
@@ -115,6 +164,7 @@ $configureArgs = @(
     "--disable-tools",
     "--disable-werror",
     "-Doptimization=0",
+    "-Db_vscrt=md",
     "-Db_lto=false"
 )
 
@@ -134,9 +184,13 @@ $configureCommand = @(
     "export RANLIB=:",
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
-    "export PATH=`"`$PWD:${msvcBinBash}:${sdkBinBash}:`$PATH`"",
+    "export PATH=`"${probePathBash}`"",
+    "export PKG_CONFIG=`"${pkgConfigBash}`"",
+    "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirBash}`"",
+    "export PKG_CONFIG_PATH=`"${pkgConfigLibdirBash}`"",
     "command -v cl",
     "command -v link",
+    "command -v pkgconf",
     "command -v msvc-cl.cmd",
     $configureLine
 ) -join "; "
