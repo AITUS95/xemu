@@ -36,6 +36,15 @@ function Import-VisualStudioEnvironment {
     }
 }
 
+function ConvertTo-GitBashPath {
+    param([string]$WindowsPath)
+
+    $fullPath = (Resolve-Path $WindowsPath).Path
+    $drive = $fullPath.Substring(0, 1).ToLowerInvariant()
+    $path = $fullPath.Substring(2).Replace("\", "/")
+    return "/$drive$path"
+}
+
 function Invoke-LoggedCommand {
     param(
         [string]$FilePath,
@@ -64,6 +73,11 @@ Write-Host "QEMU CPU:   $QemuCpu"
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
+
+$msvcBin = Split-Path (Get-Command cl.exe -ErrorAction Stop).Source -Parent
+$sdkBin = Split-Path (Get-Command rc.exe -ErrorAction Stop).Source -Parent
+$msvcBinBash = ConvertTo-GitBashPath $msvcBin
+$sdkBinBash = ConvertTo-GitBashPath $sdkBin
 
 cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
 python --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "python-version.log")
@@ -120,8 +134,9 @@ $configureCommand = @(
     "export RANLIB=:",
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
-    "export PATH=`$PWD:`$PATH",
+    "export PATH=`$PWD:${msvcBinBash}:${sdkBinBash}:`$PATH",
     "command -v cl",
+    "command -v link",
     "command -v msvc-cl.cmd",
     $configureLine
 ) -join "; "
