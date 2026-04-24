@@ -108,9 +108,12 @@ $pkgConfig = Join-Path $pkgconfBin "pkgconf.exe"
 $pkgConfigDirs = @(
     (Join-Path $vcpkgInstalled "lib\pkgconfig"),
     (Join-Path $vcpkgInstalled "share\pkgconfig")
-)
+) | Where-Object { Test-Path $_ }
 if (-not (Test-Path $pkgConfig)) {
     throw "pkgconf.exe not found at $pkgConfig"
+}
+if (-not $pkgConfigDirs) {
+    throw "No vcpkg pkg-config directories were found under $vcpkgInstalled"
 }
 
 $env:PATH = "$pkgconfBin;$vcpkgBin;$env:PATH"
