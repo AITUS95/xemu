@@ -4,8 +4,10 @@
    The assumption is that this area does not change.
 */
 #include "qemu/osdep.h"
+#ifndef _WIN32
 #include <sys/param.h>
 #include <dirent.h>
+#endif
 #include "qemu/cutils.h"
 #include "qemu/path.h"
 #include "qemu/thread.h"
