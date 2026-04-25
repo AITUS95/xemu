@@ -754,6 +754,20 @@ ssize_t writev(int fd, const struct iovec *iov, int iov_cnt);
 #endif
 
 #ifdef _WIN32
+#ifdef _MSC_VER
+static inline int gettimeofday(struct timeval *tv, void *tz)
+{
+    int64_t now = g_get_real_time();
+
+    (void)tz;
+    if (tv) {
+        tv->tv_sec = (long)(now / G_USEC_PER_SEC);
+        tv->tv_usec = (long)(now % G_USEC_PER_SEC);
+    }
+    return 0;
+}
+#endif
+
 static inline void qemu_timersub(const struct timeval *val1,
                                  const struct timeval *val2,
                                  struct timeval *res)
