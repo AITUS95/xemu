@@ -130,16 +130,26 @@ def translate_args(args):
     i = 0
     while i < len(args):
         arg = args[i]
+        lower_arg = arg.lower()
 
         if arg == "-c":
             compile_only = True
             append_translated(out, report, arg, "/c")
+        elif lower_arg == "/c":
+            compile_only = True
+            out.append(arg)
         elif arg == "-E":
             preprocess_only = True
             append_translated(out, report, arg, "/E")
+        elif lower_arg in {"/e", "/ep", "/p"}:
+            preprocess_only = True
+            out.append(arg)
         elif arg == "-S":
             assemble_only = True
             append_translated(out, report, arg, "/S")
+        elif lower_arg == "/s":
+            assemble_only = True
+            out.append(arg)
         elif arg == "-o":
             i += 1
             if i >= len(args):
@@ -173,6 +183,8 @@ def translate_args(args):
         elif arg in DANGEROUS_FLAGS:
             warn_flag(report, arg)
         elif arg in {"-g", "-g3", "-ggdb", "-gdwarf-4"}:
+            append_translated_once(out, report, arg, "/Zi")
+        elif lower_arg == "/z7":
             append_translated_once(out, report, arg, "/Zi")
         elif arg == "-O0":
             append_translated(out, report, arg, "/Od")
