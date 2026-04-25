@@ -2371,7 +2371,7 @@ endif
 vulkan = not_found
 libglslang = not_found
 
-if host_os == 'windows'
+if host_os == 'windows' and cc.has_header('vulkan/vk_platform.h')
   vulkan = declare_dependency(compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'])
 elif host_os == 'linux'
   vulkan = dependency('vulkan')
