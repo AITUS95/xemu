@@ -295,6 +295,8 @@ $configureArgs = @(
     "--disable-rust",
     "--disable-tools",
     "--disable-werror",
+    "--extra-cflags=-DXBOX=1",
+    "--extra-cxxflags=-DXBOX=1",
     "-Doptimization=0",
     "-Db_vscrt=md",
     "-Db_lto=false",

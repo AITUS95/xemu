@@ -35,7 +35,9 @@
 #include "net/net.h"
 #include "net/hub.h"
 #include "net/slirp.h"
+#ifdef CONFIG_SLIRP
 #include <libslirp.h>
+#endif
 #if defined(_WIN32)
 #include <pcap/pcap.h>
 #endif
@@ -108,6 +110,7 @@ void xemu_net_enable(void)
         return;
     }
 
+#ifdef CONFIG_SLIRP
     if (g_config.net.backend == CONFIG_NET_BACKEND_NAT) {
         void *s = slirp_get_state_from_netdev(id);
         assert(s != NULL);
@@ -134,6 +137,7 @@ void xemu_net_enable(void)
 
         }
     }
+#endif
 
     if (local_err) {
         xemu_net_disable();
@@ -166,6 +170,7 @@ static void remove_netdev(const char *name)
 
 static void clear_slirp_port_forwards(void)
 {
+#ifdef CONFIG_SLIRP
     void *s = slirp_get_state_from_netdev(id);
     if (!s) {
         return;
@@ -179,6 +184,7 @@ static void clear_slirp_port_forwards(void)
                              host_addr,
                              g_config.net.nat.forward_ports[i].host);
     }
+#endif
 }
 
 void xemu_net_disable(void)

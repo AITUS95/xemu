@@ -51,6 +51,7 @@ LINKER_DEFAULTS = [
     "/OPT:REF",
     "/OPT:NOICF",
 ]
+CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 
 
 def add_once(out, value):
@@ -68,6 +69,10 @@ def append_std_flag(out, value, compiler_name=""):
         out.append(f"/std:{value}")
     elif value in {"c++14", "c++17", "c++20"}:
         out.append(f"/std:{value}")
+
+
+def is_cxx_source(path):
+    return Path(path).suffix in CXX_SOURCE_SUFFIXES
 
 
 def append_translated(out, report, source, *values):
@@ -260,6 +265,11 @@ def translate_args(args, compiler_name=""):
             append_translated(out, report, "-o " + output, "/Fo" + output)
         else:
             append_translated(out, report, "-o " + output, "/Fe" + output)
+
+    if any(is_cxx_source(source) for source in source_inputs) or any(
+        flag.lower().startswith("/std:c++") for flag in out
+    ):
+        append_translated_once(out, report, "<cxx-default>", "/EHsc")
 
     if not compile_only and not preprocess_only and not assemble_only:
         out.append("/link")
