@@ -122,16 +122,34 @@ QEMU_EXTERN_C int daemon(int, int);
 #endif
 #include <inttypes.h>
 #include <limits.h>
+#ifdef _MSC_VER
+#include <io.h>
+#include <process.h>
+#ifndef STDIN_FILENO
+#define STDIN_FILENO 0
+#endif
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef STDERR_FILENO
+#define STDERR_FILENO 2
+#endif
+#else
 /* Put unistd.h before time.h as that triggers localtime_r/gmtime_r
  * function availability on recentish Mingw-w64 platforms. */
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#ifndef _MSC_VER
 #include <getopt.h>
+#endif
 #include <sys/stat.h>
+#ifndef _MSC_VER
 #include <sys/time.h>
+#endif
 #include <assert.h>
 /* setjmp must be declared before system/os-win32.h
  * because it is redefined there. */
