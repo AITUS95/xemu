@@ -18,6 +18,11 @@
 //
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <algorithm>
 #include <SDL3/SDL.h>
 #include <epoxy/gl.h>
 #include "ui/xemu-settings.h"
@@ -32,6 +37,13 @@
 #include <stb_image.h>
 
 #include "qemu/osdep.h"
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
