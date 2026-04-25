@@ -12,6 +12,7 @@ on:
       - ".github/workflows/**"
       - "scripts/ci/**"
       - "include/**"
+      - "util/**"
       - "meson.build"
       - "meson_options.txt"
       - "subprojects/**"
