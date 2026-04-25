@@ -993,7 +993,7 @@ static int unix_listen_saddr(UnixSocketAddress *saddr,
          * to unlink first and thus re-open the race window.  The
          * worst case possible is bind() failing, i.e. a DoS attack.
          */
-        fd = mkstemp(pathbuf);
+        fd = g_mkstemp(pathbuf);
         if (fd < 0) {
             error_setg_errno(errp, errno,
                              "Failed to make a temporary socket %s", pathbuf);
