@@ -216,12 +216,41 @@ try {
     Pop-Location
 }
 
+$buildExit = $null
+if ($configureExit -eq 0) {
+    $buildCommand = @(
+        "set -o pipefail",
+        "export AR=lib",
+        "export LD=link",
+        "export NM=dumpbin",
+        "export WINDRES=rc",
+        "export DLLTOOL=:",
+        "export RANLIB=:",
+        "export STRIP=:",
+        "export MSVC_CL_WRAPPER_TRACE=1",
+        "export PATH=`"${probePathBash}`"",
+        "export PKG_CONFIG=`"${pkgConfigMeson}`"",
+        "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",
+        "export PKG_CONFIG_PATH=`"${pkgConfigLibdirMeson}`"",
+        "python -m mesonbuild.mesonmain compile -C . --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
+    ) -join "; "
+
+    Push-Location $buildPath
+    try {
+        Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
+        $buildExit = $script:LastCommandExitCode
+    } finally {
+        Pop-Location
+    }
+}
+
 if (Test-Path (Join-Path $buildPath "config.log")) {
     Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
 }
 
 @(
     "configure_exit_code=$configureExit",
+    "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
     "strict=$Strict"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 
@@ -229,6 +258,12 @@ if ($configureExit -ne 0) {
     Write-Warning "MSVC configure probe failed with exit code $configureExit. Logs were written to $logsDir."
     if ($Strict) {
         exit $configureExit
+    }
+}
+if ($null -ne $buildExit -and $buildExit -ne 0) {
+    Write-Warning "MSVC build probe failed with exit code $buildExit. Logs were written to $logsDir."
+    if ($Strict) {
+        exit $buildExit
     }
 }
 

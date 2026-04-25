@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   configure:
-    name: Configure with MSVC (${{ matrix.arch }})
+    name: Build with MSVC (${{ matrix.arch }})
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -50,7 +50,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run MSVC configure probe
+      - name: Run MSVC build probe
         shell: pwsh
         env:
           STRICT: ${{ inputs.strict || 'false' }}
