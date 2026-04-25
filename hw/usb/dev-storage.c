@@ -573,7 +573,7 @@ static const VMStateDescription vmstate_usb_msd = {
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_USB_DEVICE(dev, MSDState),
-        VMSTATE_UINT32(mode, MSDState),
+        VMSTATE_SINGLE(mode, MSDState, 0, vmstate_info_uint32, enum USBMSDMode),
         VMSTATE_UINT32(scsi_len, MSDState),
         VMSTATE_UINT32(scsi_off, MSDState),
         VMSTATE_UINT32(data_len, MSDState),
