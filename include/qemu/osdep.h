@@ -125,6 +125,9 @@ QEMU_EXTERN_C int daemon(int, int);
 #ifdef _MSC_VER
 #include <io.h>
 #include <process.h>
+typedef intptr_t ssize_t;
+typedef int mode_t;
+typedef int pid_t;
 #ifndef STDIN_FILENO
 #define STDIN_FILENO 0
 #endif
@@ -830,7 +833,9 @@ static inline intptr_t qemu_real_host_page_mask(void)
  */
 static inline void qemu_reset_optind(void)
 {
-#ifdef HAVE_OPTRESET
+#ifdef _MSC_VER
+    return;
+#elif defined(HAVE_OPTRESET)
     optind = 1;
     optreset = 1;
 #else
