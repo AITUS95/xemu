@@ -233,6 +233,10 @@ typedef int pid_t;
 #include "system/os-win32.h"
 #endif
 
+#ifdef _MSC_VER
+#define sleep(seconds) Sleep((DWORD)(seconds) * 1000U)
+#endif
+
 #if defined(CONFIG_POSIX) && !defined(EMSCRIPTEN)
 #include "system/os-posix.h"
 #endif
@@ -855,6 +859,69 @@ static inline intptr_t qemu_real_host_page_mask(void)
     return -(intptr_t)qemu_real_host_page_size();
 }
 
+#ifdef _MSC_VER
+static char *optarg;
+static int optind = 1;
+static int optopt;
+static char *qemu_msvc_optpos;
+
+static inline int getopt(int argc, char * const argv[], const char *optstring)
+{
+    const char *opt;
+    int option;
+
+    optarg = NULL;
+
+    if (optind == 0) {
+        optind = 1;
+    }
+
+    if (!qemu_msvc_optpos || *qemu_msvc_optpos == '\0') {
+        if (optind >= argc || argv[optind][0] != '-' ||
+            argv[optind][1] == '\0') {
+            return -1;
+        }
+        if (strcmp(argv[optind], "--") == 0) {
+            optind++;
+            return -1;
+        }
+        qemu_msvc_optpos = argv[optind] + 1;
+    }
+
+    option = *qemu_msvc_optpos++;
+    optopt = option;
+    opt = strchr(optstring, option);
+    if (!opt || option == ':') {
+        if (*qemu_msvc_optpos == '\0') {
+            optind++;
+            qemu_msvc_optpos = NULL;
+        }
+        return '?';
+    }
+
+    if (opt[1] == ':') {
+        if (*qemu_msvc_optpos != '\0') {
+            optarg = qemu_msvc_optpos;
+            optind++;
+            qemu_msvc_optpos = NULL;
+        } else if (optind + 1 < argc) {
+            optarg = argv[++optind];
+            optind++;
+            qemu_msvc_optpos = NULL;
+        } else {
+            optind++;
+            qemu_msvc_optpos = NULL;
+            return optstring[0] == ':' ? ':' : '?';
+        }
+    } else if (*qemu_msvc_optpos == '\0') {
+        optind++;
+        qemu_msvc_optpos = NULL;
+    }
+
+    return option;
+}
+#endif
+
 /*
  * After using getopt or getopt_long, if you need to parse another set
  * of options, then you must reset optind.  Unfortunately the way to
@@ -863,7 +930,9 @@ static inline intptr_t qemu_real_host_page_mask(void)
 static inline void qemu_reset_optind(void)
 {
 #ifdef _MSC_VER
-    return;
+    optind = 1;
+    optarg = NULL;
+    qemu_msvc_optpos = NULL;
 #elif defined(HAVE_OPTRESET)
     optind = 1;
     optreset = 1;
