@@ -148,7 +148,11 @@ if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     $binarySources += "x-gha,readwrite"
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
-$vcpkgPackages = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate") | ForEach-Object { "${_}:$VcpkgTriplet" }
+$vcpkgPackageNames = @("pkgconf", "glib", "pixman")
+if ($BuildScope -eq "full") {
+    $vcpkgPackageNames += @("libepoxy", "libsamplerate")
+}
+$vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
 if ($script:LastCommandExitCode -ne 0) {
