@@ -216,10 +216,7 @@ if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     }
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
-$vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy")
-if ($BuildScope -eq "full") {
-    $vcpkgPackageNames += @("libsamplerate")
-}
+$vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate")
 $vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
