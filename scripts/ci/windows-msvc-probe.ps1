@@ -85,7 +85,12 @@ function Log-Phase {
     param([string]$Message)
 
     $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Write-Host "[$now] $Message"
+    $line = "[$now] $Message"
+    Write-Host $line
+    $script:PhaseEvents += $line
+    if ($script:PhaseLog) {
+        Add-Content -Path $script:PhaseLog -Value $line
+    }
 }
 
 function Start-Phase {
@@ -107,6 +112,8 @@ function End-Phase {
 }
 
 $script:PhaseStart = @{}
+$script:PhaseEvents = @()
+$script:PhaseLog = $null
 Start-Phase "probe"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -118,6 +125,8 @@ $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
+$script:PhaseLog = Join-Path $logsDir "phase-timings.log"
+$script:PhaseEvents | Set-Content -Path $script:PhaseLog
 
 Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture

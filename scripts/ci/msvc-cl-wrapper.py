@@ -117,6 +117,9 @@ def translate_args(args):
     preprocess_only = False
     assemble_only = False
     output = None
+    depfile = None
+    dep_target = None
+    source_inputs = []
     out = ["/nologo"]
     link = []
     report = {
@@ -160,6 +163,23 @@ def translate_args(args):
             output = args[i]
         elif arg.startswith("-o") and len(arg) > 2:
             output = arg[2:]
+        elif arg in {"-MD", "-MMD", "-MP"}:
+            ignore_flag(report, arg)
+        elif arg in {"-MF", "-MQ", "-MT"}:
+            i += 1
+            if i >= len(args):
+                raise SystemExit(f"{arg} requires an argument")
+            if arg == "-MF":
+                depfile = args[i]
+            else:
+                dep_target = args[i]
+            ignore_flag(report, f"{arg} {args[i]}")
+        elif arg.startswith("-MF") and len(arg) > 3:
+            depfile = arg[3:]
+            ignore_flag(report, arg)
+        elif arg.startswith(("-MQ", "-MT")) and len(arg) > 3:
+            dep_target = arg[3:]
+            ignore_flag(report, arg)
         elif arg == "-include":
             i += 1
             if i >= len(args):
@@ -227,6 +247,7 @@ def translate_args(args):
             out.append(arg)
         else:
             out.append(arg)
+            source_inputs.append(arg)
 
         i += 1
 
@@ -243,7 +264,32 @@ def translate_args(args):
             report["translated"].append(("<link-default>", flag))
         out.extend(link)
 
-    return out, report
+    depinfo = {
+        "depfile": depfile,
+        "target": dep_target or output,
+        "sources": source_inputs,
+    }
+    return out, report, depinfo
+
+
+def depfile_escape(value):
+    return value.replace("\\", "/").replace(" ", "\\ ")
+
+
+def write_depfile(depinfo):
+    depfile = depinfo.get("depfile")
+    target = depinfo.get("target")
+    if not depfile or not target:
+        return
+
+    sources = depinfo.get("sources") or []
+    Path(depfile).parent.mkdir(parents=True, exist_ok=True)
+    line = depfile_escape(target) + ":"
+    if sources:
+        line += " " + " ".join(depfile_escape(source) for source in sources)
+    with open(depfile, "w", encoding="utf-8", newline="\n") as dep:
+        dep.write(line)
+        dep.write("\n")
 
 
 def emit_report(compiler, translated, report):
@@ -299,10 +345,13 @@ def main():
         print("x86_64-pc-windows-msvc")
         return 0
 
-    translated, report = translate_args(args)
+    translated, report, depinfo = translate_args(args)
     emit_report(compiler, translated, report)
 
-    return subprocess.run([compiler, *translated]).returncode
+    result = subprocess.run([compiler, *translated])
+    if result.returncode == 0:
+        write_depfile(depinfo)
+    return result.returncode
 
 
 if __name__ == "__main__":
