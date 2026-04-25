@@ -7,7 +7,7 @@ XEMU_DATE=$(date -u)
 XEMU_COMMIT=$( \
   cd "$dir"; \
   if test -e .git; then \
-    git rev-parse HEAD 2>/dev/null | tr -d '\n'; \
+    { git rev-parse HEAD 2>/dev/null || true; } | tr -d '\n'; \
   elif test -e XEMU_COMMIT; then \
     cat XEMU_COMMIT; \
   fi)
@@ -21,6 +21,9 @@ XEMU_VERSION=$( \
 
 if [[ "${XEMU_VERSION}" == "" ]]; then
   XEMU_VERSION="0.0.0"
+fi
+if [[ "${XEMU_COMMIT}" == "" ]]; then
+  XEMU_COMMIT="unknown"
 fi
 
 get_version_field() {

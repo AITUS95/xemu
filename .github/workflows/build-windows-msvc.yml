@@ -9,6 +9,8 @@ on:
       - "scripts/ci/msvc-cl.cmd"
       - "scripts/ci/msvc-cl-wrapper.py"
       - "scripts/ci/windows-msvc-probe.ps1"
+      - "scripts/xemu-version.sh"
+      - ".gitattributes"
       - "configure"
       - "meson.build"
       - "include/qemu/**"

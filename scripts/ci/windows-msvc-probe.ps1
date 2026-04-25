@@ -82,8 +82,10 @@ function Invoke-LoggedCommand {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDir = Join-Path $repoRoot "msvc-probe-logs"
 $buildPath = Join-Path $repoRoot $BuildDir
+$wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
 
 Import-VisualStudioEnvironment -Arch $Architecture
 
@@ -139,6 +141,8 @@ $vcpkgBinBash = ConvertTo-GitBashPath $vcpkgBin
 $pkgconfBinBash = ConvertTo-GitBashPath $pkgconfBin
 $pkgConfigMeson = ConvertTo-WindowsSlashPath $pkgConfig
 $pkgConfigLibdirMeson = ($pkgConfigDirs | ForEach-Object { ConvertTo-WindowsSlashPath $_ }) -join ";"
+$repoRootMeson = ConvertTo-WindowsSlashPath $repoRoot
+$wrapperLogMeson = $wrapperLog.Replace("\", "/")
 $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
 cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
@@ -197,6 +201,7 @@ $configureCommand = @(
     "export RANLIB=:",
     "export STRIP=:",
     "export MSVC_CL_WRAPPER_TRACE=1",
+    "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
     "export PATH=`"${probePathBash}`"",
     "export PKG_CONFIG=`"${pkgConfigMeson}`"",
     "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",
@@ -240,6 +245,25 @@ if ($configureExit -eq 0) {
 }
 
 if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
+    $xemuVersionCommand = @(
+        "set -o pipefail",
+        "cat ../scripts/xemu-version.sh",
+        "bash -n ../scripts/xemu-version.sh",
+        "bash -x ../scripts/xemu-version.sh `"${repoRootMeson}`" 2>&1 | tee ../msvc-probe-logs/xemu-version-diagnostics.log; xemu_version_exit=`${PIPESTATUS[0]}; echo xemu_version_exit=`$xemu_version_exit; test `$xemu_version_exit -eq 0"
+    ) -join "; "
+
+    Push-Location $buildPath
+    try {
+        Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $xemuVersionCommand)
+        if ($script:LastCommandExitCode -ne 0) {
+            $buildExit = $script:LastCommandExitCode
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     $buildCommand = @(
         "set -o pipefail",
         "export AR=lib",
@@ -250,6 +274,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
         "export RANLIB=:",
         "export STRIP=:",
         "export MSVC_CL_WRAPPER_TRACE=1",
+        "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
         "export PATH=`"${probePathBash}`"",
         "export PKG_CONFIG=`"${pkgConfigMeson}`"",
         "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",

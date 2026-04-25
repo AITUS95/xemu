@@ -12,15 +12,49 @@ import subprocess
 import sys
 
 
-IGNORED_FLAGS = {
+SAFE_IGNORED_FLAGS = {
     "-fno-common",
     "-fno-pie",
     "-fno-strict-aliasing",
     "-fwrapv",
     "-m64",
     "-no-pie",
+    "-pipe",
     "-pthread",
 }
+
+DANGEROUS_FLAGS = {
+    "-m32",
+    "-nostdlib",
+    "-r",
+}
+
+IGNORED_LINKER_FLAGS = {
+    "--as-needed",
+    "--build-id",
+    "--build-id=none",
+    "--no-as-needed",
+    "-rpath",
+    "-rpath-link",
+    "-z",
+    "noexecstack",
+    "now",
+    "relro",
+}
+
+COMPILER_DEFAULTS = ["/Zi", "/FS", "/MD", "/Oy-"]
+LINKER_DEFAULTS = [
+    "/DEBUG:FULL",
+    "/PDB:xemu.pdb",
+    "/INCREMENTAL:NO",
+    "/OPT:REF",
+    "/OPT:NOICF",
+]
+
+
+def add_once(out, value):
+    if value.lower() not in {item.lower() for item in out}:
+        out.append(value)
 
 
 def append_std_flag(out, value):
@@ -31,11 +65,67 @@ def append_std_flag(out, value):
         out.append(f"/std:{value}")
 
 
+def append_translated(out, report, source, *values):
+    out.extend(values)
+    report["translated"].append((source, " ".join(values)))
+
+
+def append_translated_once(out, report, source, value):
+    add_once(out, value)
+    report["translated"].append((source, value))
+
+
+def ignore_flag(report, value):
+    report["ignored"].append(value)
+
+
+def warn_flag(report, value):
+    report["unknown"].append(value)
+
+
+def append_define_include_undef(out, report, arg, value=None):
+    prefix = "/" + arg[1]
+    translated = prefix + (value if value is not None else arg[2:])
+    append_translated(out, report, arg if value is None else f"{arg} {value}", translated)
+
+
+def append_linker_item(link, report, item):
+    if not item:
+        return None
+    if item in IGNORED_LINKER_FLAGS or item.startswith("--build-id"):
+        ignore_flag(report, item)
+        return item in {"-rpath", "-rpath-link", "-z"}
+    if item.startswith("-l") and len(item) > 2:
+        translated = item[2:] + ".lib"
+        link.append(translated)
+        report["translated"].append((item, translated))
+        return False
+    if item.startswith("-L") and len(item) > 2:
+        translated = "/LIBPATH:" + item[2:]
+        link.append(translated)
+        report["translated"].append((item, translated))
+        return False
+    if item.startswith("-"):
+        warn_flag(report, item)
+    link.append(item)
+    return False
+
+
 def translate_args(args):
     compile_only = False
+    preprocess_only = False
+    assemble_only = False
     output = None
     out = ["/nologo"]
     link = []
+    report = {
+        "translated": [],
+        "ignored": [],
+        "unknown": [],
+    }
+
+    for flag in COMPILER_DEFAULTS:
+        append_translated_once(out, report, "<default>", flag)
 
     i = 0
     while i < len(args):
@@ -43,11 +133,13 @@ def translate_args(args):
 
         if arg == "-c":
             compile_only = True
-            out.append("/c")
+            append_translated(out, report, arg, "/c")
         elif arg == "-E":
-            out.append("/E")
+            preprocess_only = True
+            append_translated(out, report, arg, "/E")
         elif arg == "-S":
-            out.append("/S")
+            assemble_only = True
+            append_translated(out, report, arg, "/S")
         elif arg == "-o":
             i += 1
             if i >= len(args):
@@ -59,30 +151,64 @@ def translate_args(args):
             i += 1
             if i >= len(args):
                 raise SystemExit("-include requires a header path")
-            out.append("/FI" + args[i])
+            append_translated(out, report, f"{arg} {args[i]}", "/FI" + args[i])
         elif arg.startswith("-include") and len(arg) > len("-include"):
-            out.append("/FI" + arg[len("-include"):])
-        elif arg in IGNORED_FLAGS:
-            pass
+            append_translated(out, report, arg, "/FI" + arg[len("-include"):])
+        elif arg in {"-D", "-I", "-U"}:
+            i += 1
+            if i >= len(args):
+                raise SystemExit(f"{arg} requires an argument")
+            append_define_include_undef(out, report, arg, args[i])
+        elif arg.startswith(("-D", "-I", "-U")) and len(arg) > 2:
+            append_define_include_undef(out, report, arg)
+        elif arg in {"-isystem", "-iquote", "-idirafter"}:
+            i += 1
+            if i >= len(args):
+                raise SystemExit(f"{arg} requires an include path")
+            append_translated(out, report, f"{arg} {args[i]}", "/I" + args[i])
+        elif arg.startswith("-isystem") and len(arg) > len("-isystem"):
+            append_translated(out, report, arg, "/I" + arg[len("-isystem"):])
+        elif arg in SAFE_IGNORED_FLAGS:
+            ignore_flag(report, arg)
+        elif arg in DANGEROUS_FLAGS:
+            warn_flag(report, arg)
         elif arg in {"-g", "-g3", "-ggdb", "-gdwarf-4"}:
-            out.append("/Zi")
+            append_translated_once(out, report, arg, "/Zi")
         elif arg == "-O0":
-            out.append("/Od")
+            append_translated(out, report, arg, "/Od")
         elif arg in {"-O1", "-O2", "-O3", "-Os"}:
-            out.append("/O2")
+            append_translated(out, report, arg, "/O2")
         elif arg.startswith("-std="):
+            before = list(out)
             append_std_flag(out, arg.split("=", 1)[1])
+            for value in out[len(before):]:
+                report["translated"].append((arg, value))
         elif arg.startswith("-Wl,"):
+            skip_next = False
             for item in arg[4:].split(","):
-                if item and not item.startswith("--build-id"):
-                    link.append(item)
+                if skip_next:
+                    ignore_flag(report, item)
+                    skip_next = False
+                    continue
+                skip_next = bool(append_linker_item(link, report, item))
         elif arg.startswith("-W"):
-            pass
+            ignore_flag(report, arg)
         elif arg.startswith("-l") and len(arg) > 2:
-            link.append(arg[2:] + ".lib")
+            append_linker_item(link, report, arg)
+        elif arg == "-L":
+            i += 1
+            if i >= len(args):
+                raise SystemExit("-L requires a library path")
+            translated = "/LIBPATH:" + args[i]
+            link.append(translated)
+            report["translated"].append((f"{arg} {args[i]}", translated))
         elif arg.startswith("-L") and len(arg) > 2:
-            link.append("/LIBPATH:" + arg[2:])
-        elif arg.startswith("-D") or arg.startswith("-I") or arg.startswith("-U"):
+            append_linker_item(link, report, arg)
+        elif arg.lower() == "/link":
+            link.extend(args[i + 1:])
+            break
+        elif arg.startswith("-"):
+            warn_flag(report, arg)
             out.append(arg)
         else:
             out.append(arg)
@@ -91,15 +217,50 @@ def translate_args(args):
 
     if output:
         if compile_only:
-            out.append("/Fo" + output)
+            append_translated(out, report, "-o " + output, "/Fo" + output)
         else:
-            out.append("/Fe" + output)
+            append_translated(out, report, "-o " + output, "/Fe" + output)
 
-    if link:
+    if not compile_only and not preprocess_only and not assemble_only:
         out.append("/link")
+        out.extend(LINKER_DEFAULTS)
+        for flag in LINKER_DEFAULTS:
+            report["translated"].append(("<link-default>", flag))
         out.extend(link)
 
-    return out
+    return out, report
+
+
+def emit_report(compiler, translated, report):
+    trace = os.environ.get("MSVC_CL_WRAPPER_TRACE")
+    has_unknown = bool(report["unknown"])
+    if not trace and not has_unknown:
+        return
+
+    lines = [
+        f"[msvc-cl-wrapper] Command: {compiler} {' '.join(translated)}",
+    ]
+    if report["translated"]:
+        lines.append("[msvc-cl-wrapper] Translated flags:")
+        lines.extend(f"  {source} -> {target}" for source, target in report["translated"])
+    if report["ignored"]:
+        lines.append("[msvc-cl-wrapper] Ignored GCC flags (safe to skip):")
+        lines.extend(f"  {value}" for value in report["ignored"])
+    if report["unknown"]:
+        lines.append("[msvc-cl-wrapper] Unknown/dangerous flags:")
+        lines.extend(f"  {value}" for value in report["unknown"])
+
+    message = "\n".join(lines)
+    print(message, file=sys.stderr)
+
+    log_path = os.environ.get("MSVC_CL_WRAPPER_LOG")
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(message)
+                log.write("\n")
+        except OSError as exc:
+            print(f"[msvc-cl-wrapper] warning: could not write {log_path}: {exc}", file=sys.stderr)
 
 
 def main():
@@ -113,9 +274,8 @@ def main():
         subprocess.run([compiler, "/Bv"], check=False)
         return 0
 
-    translated = translate_args(args)
-    if os.environ.get("MSVC_CL_WRAPPER_TRACE"):
-        print("msvc-cl-wrapper:", compiler, " ".join(translated), file=sys.stderr)
+    translated, report = translate_args(args)
+    emit_report(compiler, translated, report)
 
     return subprocess.run([compiler, *translated]).returncode
 
