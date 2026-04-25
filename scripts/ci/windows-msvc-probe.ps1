@@ -341,12 +341,13 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
                     ((@($_.filename) -join "`n") -match "libqemuutil\.a")
                 } | Select-Object -First 1)
                 if ($qemuUtilTarget) {
-                    if (((@($qemuUtilTarget.filename) -join "`n") -match "libqemuutil\.a")) {
-                        $compileTarget = "libqemuutil.a"
-                    } elseif ($qemuUtilTarget.name) {
+                    if ($qemuUtilTarget.name) {
                         $compileTarget = $qemuUtilTarget.name
-                    } else {
+                    } elseif ($qemuUtilTarget.id) {
                         $compileTarget = $qemuUtilTarget.id
+                    } else {
+                        Write-Warning "Found qemuutil/libqemuutil target, but Meson introspection did not include a target name or id."
+                        $buildExit = 1
                     }
                 } else {
                     Write-Warning "Could not find qemuutil/libqemuutil target in Meson introspection output."
