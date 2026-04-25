@@ -183,6 +183,50 @@ typedef int pid_t;
 #include <getopt.h>
 #endif
 #include <sys/stat.h>
+#ifdef _MSC_VER
+#ifndef S_IRUSR
+#define S_IRUSR _S_IREAD
+#endif
+#ifndef S_IWUSR
+#define S_IWUSR _S_IWRITE
+#endif
+#ifndef S_IXUSR
+#define S_IXUSR _S_IEXEC
+#endif
+#ifndef S_IRGRP
+#define S_IRGRP S_IRUSR
+#endif
+#ifndef S_IWGRP
+#define S_IWGRP S_IWUSR
+#endif
+#ifndef S_IXGRP
+#define S_IXGRP S_IXUSR
+#endif
+#ifndef S_IROTH
+#define S_IROTH S_IRUSR
+#endif
+#ifndef S_IWOTH
+#define S_IWOTH S_IWUSR
+#endif
+#ifndef S_IXOTH
+#define S_IXOTH S_IXUSR
+#endif
+#ifndef S_IRWXU
+#define S_IRWXU (S_IRUSR | S_IWUSR | S_IXUSR)
+#endif
+#ifndef S_IRWXG
+#define S_IRWXG (S_IRGRP | S_IWGRP | S_IXGRP)
+#endif
+#ifndef S_IRWXO
+#define S_IRWXO (S_IROTH | S_IWOTH | S_IXOTH)
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(mode) (((mode) & _S_IFMT) == _S_IFREG)
+#endif
+#endif
 #ifndef _MSC_VER
 #include <sys/time.h>
 #endif
