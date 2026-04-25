@@ -142,6 +142,8 @@ def translate_args(args):
         elif arg == "-E":
             preprocess_only = True
             append_translated(out, report, arg, "/E")
+        elif arg == "-P":
+            ignore_flag(report, arg)
         elif lower_arg in {"/e", "/ep", "/p"}:
             preprocess_only = True
             out.append(arg)
