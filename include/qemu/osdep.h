@@ -128,6 +128,9 @@ QEMU_EXTERN_C int daemon(int, int);
 typedef intptr_t ssize_t;
 typedef int mode_t;
 typedef int pid_t;
+#ifndef PATH_MAX
+#define PATH_MAX _MAX_PATH
+#endif
 #ifndef F_OK
 #define F_OK 0
 #endif
