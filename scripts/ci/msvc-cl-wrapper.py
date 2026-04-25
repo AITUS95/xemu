@@ -49,12 +49,14 @@ IGNORED_LINKER_FLAGS = {
 }
 
 COMPILER_DEFAULTS = ["/Zi", "/FS", "/MD", "/Oy-"]
+LINKER_MACHINE = os.environ.get("MSVC_CL_WRAPPER_MACHINE", "X64").upper()
 LINKER_DEFAULTS = [
     "/DEBUG:FULL",
     "/PDB:xemu.pdb",
     "/INCREMENTAL:NO",
     "/OPT:REF",
     "/OPT:NOICF",
+    f"/MACHINE:{LINKER_MACHINE}",
 ]
 CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 
@@ -186,6 +188,12 @@ def append_linker_item(link, report, item):
         translated = "/LIBPATH:" + item[2:]
         link.append(translated)
         report["translated"].append((item, translated))
+        return False
+    if item.lower().startswith("/machine:"):
+        translated = f"/MACHINE:{LINKER_MACHINE}"
+        link.append(translated)
+        if item.lower() != translated.lower():
+            report["translated"].append((item, translated))
         return False
     if item.startswith("-"):
         warn_flag(report, item)
@@ -321,7 +329,13 @@ def translate_args(args, compiler_name=""):
         elif arg.startswith("-L") and len(arg) > 2:
             append_linker_item(link, report, arg)
         elif arg.lower() == "/link":
-            link.extend(args[i + 1:])
+            skip_next = False
+            for item in args[i + 1:]:
+                if skip_next:
+                    ignore_flag(report, item)
+                    skip_next = False
+                    continue
+                skip_next = bool(append_linker_item(link, report, item))
             break
         elif arg.startswith("-"):
             warn_flag(report, arg)
