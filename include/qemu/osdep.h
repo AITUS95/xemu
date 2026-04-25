@@ -128,6 +128,18 @@ QEMU_EXTERN_C int daemon(int, int);
 typedef intptr_t ssize_t;
 typedef int mode_t;
 typedef int pid_t;
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef X_OK
+#define X_OK 1
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
 #ifndef STDIN_FILENO
 #define STDIN_FILENO 0
 #endif
