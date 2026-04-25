@@ -216,9 +216,9 @@ if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     }
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
-$vcpkgPackageNames = @("pkgconf", "glib", "pixman")
+$vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy")
 if ($BuildScope -eq "full") {
-    $vcpkgPackageNames += @("libepoxy", "libsamplerate")
+    $vcpkgPackageNames += @("libsamplerate")
 }
 $vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
@@ -302,6 +302,13 @@ $configureArgs = @(
     "-Db_vscrt=md",
     "-Db_lto=false"
 )
+
+if ($BuildScope -eq "fast") {
+    $configureArgs += @(
+        "-Dsdl=disabled",
+        "-Dopengl=disabled"
+    )
+}
 
 $configureLine = $configureArgs -join " "
 if ($ExtraConfigureArgs) {
