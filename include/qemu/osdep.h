@@ -161,6 +161,20 @@ typedef int pid_t;
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#ifdef _MSC_VER
+#ifndef O_RDONLY
+#define O_RDONLY _O_RDONLY
+#endif
+#ifndef O_WRONLY
+#define O_WRONLY _O_WRONLY
+#endif
+#ifndef O_RDWR
+#define O_RDWR _O_RDWR
+#endif
+#ifndef O_ACCMODE
+#define O_ACCMODE (O_RDONLY | O_WRONLY | O_RDWR)
+#endif
+#endif
 #ifndef _MSC_VER
 #include <getopt.h>
 #endif
