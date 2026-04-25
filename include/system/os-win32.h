@@ -72,13 +72,18 @@ void __attribute__((noreturn)) __mingw_longjmp(jmp_buf, int);
 #define longjmp(env, val) __mingw_longjmp(env, val)
 #elif defined(_WIN64)
 /*
- * On windows-x64, setjmp is implemented by _setjmp which needs a second parameter.
- * If this parameter is NULL, longjump does no stack unwinding.
+ * On MinGW windows-x64, setjmp is implemented by _setjmp which needs a second
+ * parameter. If this parameter is NULL, longjump does no stack unwinding.
  * That is what we need for QEMU. Passing the value of register rsp (default)
  * lets longjmp try a stack unwinding which will crash with generated code.
+ * MSVC declares _setjmp with a single parameter.
  */
 # undef setjmp
-# define setjmp(env) _setjmp(env, NULL)
+# if defined(_MSC_VER)
+#  define setjmp(env) _setjmp(env)
+# else
+#  define setjmp(env) _setjmp(env, NULL)
+# endif
 #endif /* __aarch64__ */
 /* QEMU uses sigsetjmp()/siglongjmp() as the portable way to specify
  * "longjmp and don't touch the signal masks". Since we know that the
