@@ -76,10 +76,11 @@ jobs:
           restore-keys: |
             msvc-vcpkg-${{ runner.os }}-
 
-      - name: Run MSVC build probe
+      - name: Run MSVC fast build probe
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_scope == 'fast' }}
         shell: pwsh
+        timeout-minutes: 15
         env:
-          BUILD_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope || 'fast' }}
           STRICT: ${{ inputs.strict || 'false' }}
           EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
         run: |
@@ -87,7 +88,23 @@ jobs:
           .\scripts\ci\windows-msvc-probe.ps1 `
             -Architecture "${{ matrix.vc_arch }}" `
             -QemuCpu "${{ matrix.qemu_cpu }}" `
-            -BuildScope "$env:BUILD_SCOPE" `
+            -BuildScope "fast" `
+            -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
+            -Strict:$strict
+
+      - name: Run MSVC full build probe
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        shell: pwsh
+        timeout-minutes: 60
+        env:
+          STRICT: ${{ inputs.strict || 'false' }}
+          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
+        run: |
+          $strict = [System.Convert]::ToBoolean($env:STRICT)
+          .\scripts\ci\windows-msvc-probe.ps1 `
+            -Architecture "${{ matrix.vc_arch }}" `
+            -QemuCpu "${{ matrix.qemu_cpu }}" `
+            -BuildScope "full" `
             -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
             -Strict:$strict
 
