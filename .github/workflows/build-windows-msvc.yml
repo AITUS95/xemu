@@ -1,5 +1,9 @@
 name: Build for Windows (MSVC probe)
 
+env:
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+  VCPKG_FEATURE_FLAGS: binarycaching
+
 on:
   push:
     branches:
@@ -57,6 +61,18 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
         with:
           fetch-depth: 0
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .vcpkg-binary-cache
+            C:\vcpkg\downloads
+            C:\Users\runneradmin\AppData\Local\vcpkg\archives
+            subprojects\packagecache
+          key: msvc-vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'scripts/ci/**', 'meson.build', 'subprojects/*.wrap') }}
+          restore-keys: |
+            msvc-vcpkg-${{ runner.os }}-
 
       - name: Run MSVC build probe
         shell: pwsh

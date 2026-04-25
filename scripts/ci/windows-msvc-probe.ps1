@@ -81,6 +81,34 @@ function Invoke-LoggedCommand {
     $script:LastCommandExitCode = $LASTEXITCODE
 }
 
+function Log-Phase {
+    param([string]$Message)
+
+    $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$now] $Message"
+}
+
+function Start-Phase {
+    param([string]$Name)
+
+    $script:PhaseStart[$Name] = Get-Date
+    Log-Phase "BEGIN $Name"
+}
+
+function End-Phase {
+    param([string]$Name)
+
+    if ($script:PhaseStart.ContainsKey($Name)) {
+        $elapsed = (Get-Date) - $script:PhaseStart[$Name]
+        Log-Phase ("END {0} duration={1:n1}s" -f $Name, $elapsed.TotalSeconds)
+    } else {
+        Log-Phase "END $Name"
+    }
+}
+
+$script:PhaseStart = @{}
+Start-Phase "probe"
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDir = Join-Path $repoRoot "msvc-probe-logs"
 $artifactsDir = Join-Path $repoRoot "msvc-probe-artifacts"
@@ -91,6 +119,7 @@ New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
 
+Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture
 
 Write-Host "MSVC probe environment"
@@ -104,12 +133,20 @@ Write-Host "vcpkg:      $VcpkgTriplet"
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
+End-Phase "toolchain setup"
 
+Start-Phase "vcpkg dependency install"
 $vcpkg = Find-Vcpkg
 $vcpkgRoot = Split-Path $vcpkg -Parent
 $env:VCPKG_ROOT = $vcpkgRoot
 if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
-    $env:VCPKG_BINARY_SOURCES = "clear;x-gha,readwrite"
+    $binarySources = @("clear")
+    if ($env:VCPKG_DEFAULT_BINARY_CACHE) {
+        New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+        $binarySources += "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+    }
+    $binarySources += "x-gha,readwrite"
+    $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
 $vcpkgPackages = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate") | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
@@ -117,6 +154,7 @@ Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
 if ($script:LastCommandExitCode -ne 0) {
     exit $script:LastCommandExitCode
 }
+End-Phase "vcpkg dependency install"
 
 $vcpkgInstalled = Join-Path $vcpkgRoot "installed\$VcpkgTriplet"
 $vcpkgBin = Join-Path $vcpkgInstalled "bin"
@@ -150,6 +188,7 @@ $repoRootMeson = ConvertTo-WindowsSlashPath $repoRoot
 $wrapperLogMeson = $wrapperLog.Replace("\", "/")
 $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
+Start-Phase "python and meson tool setup"
 cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
 python --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "python-version.log")
 python -m pip install --upgrade pip meson ninja
@@ -159,6 +198,7 @@ if ($pythonScripts) {
 }
 python -m mesonbuild.mesonmain --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "meson-version.log")
 ninja --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "ninja-version.log")
+End-Phase "python and meson tool setup"
 
 if (Test-Path $buildPath) {
     Remove-Item -Recurse -Force $buildPath
@@ -220,14 +260,17 @@ $configureCommand = @(
 
 Push-Location $buildPath
 try {
+    Start-Phase "meson setup"
     Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $configureCommand)
     $configureExit = $script:LastCommandExitCode
 } finally {
+    End-Phase "meson setup"
     Pop-Location
 }
 
 $buildExit = $null
 if ($configureExit -eq 0) {
+    Start-Phase "PyYAML install"
     $buildPythonCandidates = @(
         (Join-Path $buildPath "pyvenv\Scripts\python.exe"),
         (Join-Path $buildPath "pyvenv\Scripts\python3.exe")
@@ -247,6 +290,7 @@ if ($configureExit -eq 0) {
             }
         }
     }
+    End-Phase "PyYAML install"
 }
 
 if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
@@ -260,11 +304,13 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 
     Push-Location $buildPath
     try {
+        Start-Phase "xemu-version diagnostics"
         Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $xemuVersionCommand)
         if ($script:LastCommandExitCode -ne 0) {
             $buildExit = $script:LastCommandExitCode
         }
     } finally {
+        End-Phase "xemu-version diagnostics"
         Pop-Location
     }
 }
@@ -275,6 +321,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
         $targetsLog = Join-Path $logsDir "meson-targets.json"
         Push-Location $buildPath
         try {
+            Start-Phase "meson introspect"
             & $buildPython -m mesonbuild.mesonmain introspect . --targets 2>&1 |
                 Tee-Object -FilePath $targetsLog
             if ($LASTEXITCODE -ne 0) {
@@ -300,6 +347,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
                 }
             }
         } finally {
+            End-Phase "meson introspect"
             Pop-Location
         }
     }
@@ -331,14 +379,17 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 
         Push-Location $buildPath
         try {
+            Start-Phase "meson compile $BuildScope"
             Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
             $buildExit = $script:LastCommandExitCode
         } finally {
+            End-Phase "meson compile $BuildScope"
             Pop-Location
         }
     }
 }
 
+Start-Phase "artifact collection"
 if (Test-Path (Join-Path $buildPath "config.log")) {
     Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
 }
@@ -352,18 +403,22 @@ if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
     "build_scope=$BuildScope",
     "strict=$Strict"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
+End-Phase "artifact collection"
 
 if ($configureExit -ne 0) {
     Write-Warning "MSVC configure probe failed with exit code $configureExit. Logs were written to $logsDir."
     if ($Strict) {
+        End-Phase "probe"
         exit $configureExit
     }
 }
 if ($null -ne $buildExit -and $buildExit -ne 0) {
     Write-Warning "MSVC build probe failed with exit code $buildExit. Logs were written to $logsDir."
     if ($Strict) {
+        End-Phase "probe"
         exit $buildExit
     }
 }
 
+End-Phase "probe"
 exit 0
