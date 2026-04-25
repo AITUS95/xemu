@@ -218,6 +218,28 @@ try {
 
 $buildExit = $null
 if ($configureExit -eq 0) {
+    $buildPythonCandidates = @(
+        (Join-Path $buildPath "pyvenv\Scripts\python.exe"),
+        (Join-Path $buildPath "pyvenv\Scripts\python3.exe")
+    )
+    $buildPython = $buildPythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $buildPython) {
+        Write-Warning "Meson Python venv was not found under $buildPath\pyvenv."
+        $buildExit = 1
+    } else {
+        Invoke-LoggedCommand -FilePath $buildPython -Arguments @("-m", "pip", "install", "pyyaml")
+        if ($script:LastCommandExitCode -ne 0) {
+            $buildExit = $script:LastCommandExitCode
+        } else {
+            Invoke-LoggedCommand -FilePath $buildPython -Arguments @("-c", "import yaml; print(yaml.__version__)")
+            if ($script:LastCommandExitCode -ne 0) {
+                $buildExit = $script:LastCommandExitCode
+            }
+        }
+    }
+}
+
+if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     $buildCommand = @(
         "set -o pipefail",
         "export AR=lib",
