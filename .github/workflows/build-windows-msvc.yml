@@ -64,23 +64,23 @@ jobs:
           fetch-depth: 1
           fetch-tags: true
 
-      - name: Cache vcpkg binary cache
-        uses: actions/cache@v4
+      - name: Restore vcpkg binary cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             .vcpkg-binary-cache
             C:\vcpkg\downloads
             C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-v1
+          key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            msvc-vcpkg-${{ runner.os }}-v1-
             msvc-vcpkg-${{ runner.os }}-
-          save-always: true
 
       - name: Run MSVC fast build probe
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_scope == 'fast' }}
         shell: pwsh
-        timeout-minutes: 25
+        timeout-minutes: 40
         env:
           STRICT: ${{ inputs.strict || 'false' }}
           EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
@@ -108,6 +108,17 @@ jobs:
             -BuildScope "full" `
             -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
             -Strict:$strict
+
+      - name: Save vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .vcpkg-binary-cache
+            C:\vcpkg\downloads
+            C:\Users\runneradmin\AppData\Local\vcpkg\archives
+            subprojects\packagecache
+          key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload MSVC probe logs
         if: always()
