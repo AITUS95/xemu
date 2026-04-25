@@ -297,7 +297,9 @@ $configureArgs = @(
     "--disable-werror",
     "-Doptimization=0",
     "-Db_vscrt=md",
-    "-Db_lto=false"
+    "-Db_lto=false",
+    "-Dslirp=disabled",
+    "-Dslirp_smbd=disabled"
 )
 
 if ($BuildScope -eq "fast") {
