@@ -249,7 +249,8 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
         "set -o pipefail",
         "cat ../scripts/xemu-version.sh",
         "bash -n ../scripts/xemu-version.sh",
-        "bash -x ../scripts/xemu-version.sh `"${repoRootMeson}`" 2>&1 | tee ../msvc-probe-logs/xemu-version-diagnostics.log; xemu_version_exit=`${PIPESTATUS[0]}; echo xemu_version_exit=`$xemu_version_exit; test `$xemu_version_exit -eq 0"
+        "sh -n ../scripts/xemu-version.sh",
+        "sh -x ../scripts/xemu-version.sh `"${repoRootMeson}`" 2>&1 | tee ../msvc-probe-logs/xemu-version-diagnostics.log; xemu_version_exit=`${PIPESTATUS[0]}; echo xemu_version_exit=`$xemu_version_exit; test `$xemu_version_exit -eq 0"
     ) -join "; "
 
     Push-Location $buildPath

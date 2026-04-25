@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 set -eu
 
@@ -19,10 +19,10 @@ XEMU_VERSION=$( \
     cat XEMU_VERSION; \
   fi)
 
-if [[ "${XEMU_VERSION}" == "" ]]; then
+if [ "${XEMU_VERSION}" = "" ]; then
   XEMU_VERSION="0.0.0"
 fi
-if [[ "${XEMU_COMMIT}" == "" ]]; then
+if [ "${XEMU_COMMIT}" = "" ]; then
   XEMU_COMMIT="unknown"
 fi
 
