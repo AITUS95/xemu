@@ -50,6 +50,11 @@ IGNORED_LINKER_FLAGS = {
 
 COMPILER_DEFAULTS = ["/Zi", "/FS", "/MD", "/Oy-"]
 LINKER_MACHINE = os.environ.get("MSVC_CL_WRAPPER_MACHINE", "X64").upper()
+COMPILER_RT_MACHINE = {
+    "X64": "x86_64",
+    "X86": "i386",
+    "ARM64": "aarch64",
+}.get(LINKER_MACHINE, LINKER_MACHINE.lower())
 LINKER_DEFAULTS = [
     "/DEBUG:FULL",
     "/PDB:xemu.pdb",
@@ -57,6 +62,8 @@ LINKER_DEFAULTS = [
     "/OPT:REF",
     "/OPT:NOICF",
     f"/MACHINE:{LINKER_MACHINE}",
+    "/ENTRY:mainCRTStartup",
+    "iphlpapi.lib",
 ]
 CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 
@@ -363,8 +370,11 @@ def translate_args(args, compiler_name=""):
 
     if not compile_only and not preprocess_only and not assemble_only:
         out.append("/link")
-        out.extend(LINKER_DEFAULTS)
-        for flag in LINKER_DEFAULTS:
+        linker_defaults = list(LINKER_DEFAULTS)
+        if compiler_name.startswith("clang-cl"):
+            linker_defaults.append(f"clang_rt.builtins-{COMPILER_RT_MACHINE}.lib")
+        out.extend(linker_defaults)
+        for flag in linker_defaults:
             report["translated"].append(("<link-default>", flag))
         out.extend(link)
 
