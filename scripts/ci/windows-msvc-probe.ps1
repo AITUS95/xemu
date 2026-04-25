@@ -222,11 +222,12 @@ $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
     "python `"$wrapperPy`" $compilerCommand %*",
     "exit /b %ERRORLEVEL%"
 ) | Set-Content -Path $localCompiler -Encoding ASCII
+$localCompilerMeson = ConvertTo-WindowsSlashPath $localCompiler
 
 $configureArgs = @(
     "../configure",
-    "--cc=msvc-cl.cmd",
-    "--cxx=msvc-cl.cmd",
+    "--cc=$localCompilerMeson",
+    "--cxx=$localCompilerMeson",
     "--cpu=$QemuCpu",
     "--target-list=i386-softmmu",
     "--without-default-features",

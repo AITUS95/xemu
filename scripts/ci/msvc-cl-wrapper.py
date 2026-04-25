@@ -295,6 +295,9 @@ def main():
     if "-Wl,--version" in args:
         subprocess.run(["link.exe", "/?"], check=False)
         return 0
+    if "-dumpmachine" in args:
+        print("x86_64-pc-windows-msvc")
+        return 0
 
     translated, report = translate_args(args)
     emit_report(compiler, translated, report)
