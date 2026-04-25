@@ -126,6 +126,7 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <io.h>
 #include <process.h>
 typedef intptr_t ssize_t;
+typedef int64_t off64_t;
 typedef int mode_t;
 typedef int pid_t;
 #ifndef PATH_MAX
