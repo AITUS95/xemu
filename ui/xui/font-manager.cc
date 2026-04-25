@@ -19,10 +19,12 @@
 #include "font-manager.hh"
 #include "viewport-manager.hh"
 
+extern "C" {
 #include "data/Roboto-Medium.ttf.h"
 #include "data/RobotoCondensed-Regular.ttf.h"
 #include "data/font_awesome_6_1_1_solid.min.otf.h"
 #include "data/abxy.ttf.h"
+}
 
 FontManager g_font_mgr;
 

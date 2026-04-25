@@ -9,8 +9,13 @@
 
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
+import tempfile
+
+if os.name == "nt":
+    import ctypes
 
 
 SAFE_IGNORED_FLAGS = {
@@ -52,6 +57,73 @@ LINKER_DEFAULTS = [
     "/OPT:NOICF",
 ]
 CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
+
+
+def split_response_text(text):
+    if os.name == "nt":
+        argc = ctypes.c_int()
+        shell32 = ctypes.windll.shell32
+        kernel32 = ctypes.windll.kernel32
+        shell32.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+        shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+
+        argv = shell32.CommandLineToArgvW(text, ctypes.byref(argc))
+        if not argv:
+            raise OSError("CommandLineToArgvW failed")
+        try:
+            return [argv[i] for i in range(argc.value)]
+        finally:
+            kernel32.LocalFree(argv)
+
+    return shlex.split(text)
+
+
+def expand_response_args(args, seen=None):
+    seen = seen or set()
+    expanded = []
+
+    for arg in args:
+        if not arg.startswith("@") or len(arg) == 1:
+            expanded.append(arg)
+            continue
+
+        rsp_path = arg[1:]
+        if len(rsp_path) >= 2 and rsp_path[0] == rsp_path[-1] == '"':
+            rsp_path = rsp_path[1:-1]
+        path = Path(rsp_path)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        try:
+            resolved = path.resolve()
+        except OSError:
+            expanded.append(arg)
+            continue
+        if resolved in seen or not resolved.exists():
+            expanded.append(arg)
+            continue
+
+        seen.add(resolved)
+        text = resolved.read_text(encoding="utf-8-sig")
+        expanded.extend(expand_response_args(split_response_text(text), seen))
+
+    return expanded
+
+
+def write_response_file(args):
+    rsp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        suffix=".rsp",
+        prefix="msvc-cl-wrapper-",
+        delete=False,
+    )
+    with rsp:
+        rsp.write(subprocess.list2cmdline(args))
+        rsp.write("\n")
+    return rsp.name
 
 
 def add_once(out, value):
@@ -345,6 +417,8 @@ def main():
     compiler = sys.argv[1]
     args = sys.argv[2:]
     compiler_name = Path(compiler).name.lower()
+    used_response_file = any(arg.startswith("@") and len(arg) > 1 for arg in args)
+    args = expand_response_args(args)
 
     if "--version" in args or "-v" in args:
         if compiler_name.startswith("clang-cl"):
@@ -360,9 +434,22 @@ def main():
         return 0
 
     translated, report, depinfo = translate_args(args, compiler_name)
-    emit_report(compiler, translated, report)
+    command_args = translated
+    display_args = translated
+    rsp_path = None
+    if used_response_file or sum(len(arg) + 1 for arg in translated) > 16000:
+        rsp_path = write_response_file(translated)
+        command_args = ["@" + rsp_path]
+        display_args = command_args
 
-    result = subprocess.run([compiler, *translated])
+    emit_report(compiler, display_args, report)
+
+    result = subprocess.run([compiler, *command_args])
+    if rsp_path:
+        try:
+            os.unlink(rsp_path)
+        except OSError:
+            pass
     if result.returncode == 0:
         write_depfile(depinfo)
     return result.returncode
