@@ -62,6 +62,10 @@ CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 
 
 def split_response_text(text):
+    text = text.strip()
+    if not text:
+        return []
+
     if os.name == "nt":
         argc = ctypes.c_int()
         shell32 = ctypes.windll.shell32
@@ -71,11 +75,11 @@ def split_response_text(text):
         kernel32.LocalFree.argtypes = [ctypes.c_void_p]
         kernel32.LocalFree.restype = ctypes.c_void_p
 
-        argv = shell32.CommandLineToArgvW(text, ctypes.byref(argc))
+        argv = shell32.CommandLineToArgvW("wrapper " + text, ctypes.byref(argc))
         if not argv:
             raise OSError("CommandLineToArgvW failed")
         try:
-            return [argv[i] for i in range(argc.value)]
+            return [argv[i] for i in range(1, argc.value)]
         finally:
             kernel32.LocalFree(argv)
 
