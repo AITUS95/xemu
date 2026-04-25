@@ -290,6 +290,9 @@ def main():
         else:
             subprocess.run([compiler, "/Bv"], check=False)
         return 0
+    if "-Wl,--version" in args:
+        subprocess.run(["link.exe", "/?"], check=False)
+        return 0
 
     translated, report = translate_args(args)
     emit_report(compiler, translated, report)

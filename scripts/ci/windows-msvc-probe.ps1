@@ -151,7 +151,6 @@ if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
         New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
         $binarySources += "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
     }
-    $binarySources += "x-gha,readwrite"
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
 $vcpkgPackageNames = @("pkgconf", "glib", "pixman")
