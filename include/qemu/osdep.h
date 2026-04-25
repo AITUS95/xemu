@@ -226,6 +226,9 @@ typedef int pid_t;
 #ifndef S_ISREG
 #define S_ISREG(mode) (((mode) & _S_IFMT) == _S_IFREG)
 #endif
+#ifndef S_ISFIFO
+#define S_ISFIFO(mode) 0
+#endif
 #endif
 #ifndef _MSC_VER
 #include <sys/time.h>
