@@ -2,6 +2,8 @@ param(
     [string]$Architecture = "amd64",
     [string]$QemuCpu = "x86_64",
     [string]$BuildDir = "build-msvc",
+    [ValidateSet("fast", "full")]
+    [string]$BuildScope = "fast",
     [string]$VcpkgTriplet = "x64-windows",
     [string]$ExtraConfigureArgs = "",
     [switch]$Strict
@@ -81,10 +83,12 @@ function Invoke-LoggedCommand {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDir = Join-Path $repoRoot "msvc-probe-logs"
+$artifactsDir = Join-Path $repoRoot "msvc-probe-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
 
 Import-VisualStudioEnvironment -Arch $Architecture
@@ -94,6 +98,7 @@ Write-Host "Repository: $repoRoot"
 Write-Host "Build dir:  $buildPath"
 Write-Host "Arch:       $Architecture"
 Write-Host "QEMU CPU:   $QemuCpu"
+Write-Host "Scope:      $BuildScope"
 Write-Host "vcpkg:      $VcpkgTriplet"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
@@ -265,40 +270,86 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 }
 
 if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
-    $buildCommand = @(
-        "set -o pipefail",
-        "export AR=lib",
-        "export LD=link",
-        "export NM=dumpbin",
-        "export WINDRES=rc",
-        "export DLLTOOL=:",
-        "export RANLIB=:",
-        "export STRIP=:",
-        "export MSVC_CL_WRAPPER_TRACE=1",
-        "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
-        "export PATH=`"${probePathBash}`"",
-        "export PKG_CONFIG=`"${pkgConfigMeson}`"",
-        "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",
-        "export PKG_CONFIG_PATH=`"${pkgConfigLibdirMeson}`"",
-        "python -m mesonbuild.mesonmain compile -C . --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
-    ) -join "; "
+    $compileTarget = ""
+    if ($BuildScope -eq "fast") {
+        $targetsLog = Join-Path $logsDir "meson-targets.json"
+        Push-Location $buildPath
+        try {
+            & $buildPython -m mesonbuild.mesonmain introspect . --targets 2>&1 |
+                Tee-Object -FilePath $targetsLog
+            if ($LASTEXITCODE -ne 0) {
+                $buildExit = $LASTEXITCODE
+            } else {
+                $targets = Get-Content -Raw $targetsLog | ConvertFrom-Json
+                $qemuUtilTarget = @($targets | Where-Object {
+                    $_.name -eq "qemuutil" -or
+                    $_.id -match "qemuutil" -or
+                    ((@($_.filename) -join "`n") -match "libqemuutil\.a")
+                } | Select-Object -First 1)
+                if ($qemuUtilTarget) {
+                    if (((@($qemuUtilTarget.filename) -join "`n") -match "libqemuutil\.a")) {
+                        $compileTarget = "libqemuutil.a"
+                    } elseif ($qemuUtilTarget.name) {
+                        $compileTarget = $qemuUtilTarget.name
+                    } else {
+                        $compileTarget = $qemuUtilTarget.id
+                    }
+                } else {
+                    Write-Warning "Could not find qemuutil/libqemuutil target in Meson introspection output."
+                    $buildExit = 1
+                }
+            }
+        } finally {
+            Pop-Location
+        }
+    }
 
-    Push-Location $buildPath
-    try {
-        Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
-        $buildExit = $script:LastCommandExitCode
-    } finally {
-        Pop-Location
+    if ($null -eq $buildExit -or $buildExit -eq 0) {
+        if ($BuildScope -eq "fast") {
+            $compileLine = "echo Fast MSVC probe target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
+        } else {
+            $compileLine = "echo Full MSVC probe build; python -m mesonbuild.mesonmain compile -C . --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
+        }
+
+        $buildCommand = @(
+            "set -o pipefail",
+            "export AR=lib",
+            "export LD=link",
+            "export NM=dumpbin",
+            "export WINDRES=rc",
+            "export DLLTOOL=:",
+            "export RANLIB=:",
+            "export STRIP=:",
+            "export MSVC_CL_WRAPPER_TRACE=1",
+            "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
+            "export PATH=`"${probePathBash}`"",
+            "export PKG_CONFIG=`"${pkgConfigMeson}`"",
+            "export PKG_CONFIG_LIBDIR=`"${pkgConfigLibdirMeson}`"",
+            "export PKG_CONFIG_PATH=`"${pkgConfigLibdirMeson}`"",
+            $compileLine
+        ) -join "; "
+
+        Push-Location $buildPath
+        try {
+            Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
+            $buildExit = $script:LastCommandExitCode
+        } finally {
+            Pop-Location
+        }
     }
 }
 
 if (Test-Path (Join-Path $buildPath "config.log")) {
     Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
 }
+if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
+    Copy-Item (Join-Path $buildPath "meson-logs\meson-log.txt") (Join-Path $logsDir "meson-log.txt") -Force
+}
 
 @(
     "configure_exit_code=$configureExit",
     "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
+    "build_scope=$BuildScope",
     "strict=$Strict"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 

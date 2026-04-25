@@ -5,18 +5,23 @@ on:
     branches:
       - MSVC
     paths:
-      - ".github/workflows/build-windows-msvc.yml"
-      - "scripts/ci/msvc-cl.cmd"
-      - "scripts/ci/msvc-cl-wrapper.py"
-      - "scripts/ci/windows-msvc-probe.ps1"
-      - "scripts/xemu-version.sh"
-      - ".gitattributes"
-      - "configure"
+      - ".github/workflows/**"
+      - "scripts/ci/**"
+      - "include/**"
       - "meson.build"
-      - "include/qemu/**"
-      - "include/system/os-win32.h"
+      - "meson_options.txt"
+      - "subprojects/**"
+      - "config_spec.yml"
   workflow_dispatch:
     inputs:
+      build_scope:
+        description: "MSVC probe scope"
+        required: false
+        default: "fast"
+        type: choice
+        options:
+          - fast
+          - full
       strict:
         description: Fail the workflow when the MSVC probe fails
         required: false
@@ -29,7 +34,7 @@ on:
         default: ""
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: msvc-probe-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -39,6 +44,7 @@ jobs:
   configure:
     name: Build with MSVC (${{ matrix.arch }})
     runs-on: windows-2022
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +61,7 @@ jobs:
       - name: Run MSVC build probe
         shell: pwsh
         env:
+          BUILD_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope || 'fast' }}
           STRICT: ${{ inputs.strict || 'false' }}
           EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
         run: |
@@ -62,6 +69,7 @@ jobs:
           .\scripts\ci\windows-msvc-probe.ps1 `
             -Architecture "${{ matrix.vc_arch }}" `
             -QemuCpu "${{ matrix.qemu_cpu }}" `
+            -BuildScope "$env:BUILD_SCOPE" `
             -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
             -Strict:$strict
 
@@ -72,6 +80,5 @@ jobs:
           name: msvc-probe-${{ matrix.arch }}
           path: |
             msvc-probe-logs
-            build-msvc/config.log
-            build-msvc/meson-logs
+            msvc-probe-artifacts
           if-no-files-found: warn
