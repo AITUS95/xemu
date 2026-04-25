@@ -129,6 +129,9 @@ typedef intptr_t ssize_t;
 typedef int64_t off64_t;
 typedef int mode_t;
 typedef int pid_t;
+#ifndef SSIZE_MAX
+#define SSIZE_MAX INTPTR_MAX
+#endif
 #ifndef PATH_MAX
 #define PATH_MAX _MAX_PATH
 #endif
