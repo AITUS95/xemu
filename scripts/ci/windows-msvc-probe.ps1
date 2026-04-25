@@ -111,6 +111,56 @@ function End-Phase {
     }
 }
 
+function Find-FinalExecutable {
+    param([string]$Root)
+
+    foreach ($name in @("xemu.exe", "qemu-system-i386w.exe", "qemu-system-i386.exe")) {
+        $match = Get-ChildItem -Path $Root -Recurse -File -Filter $name -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($match) {
+            return $match
+        }
+    }
+
+    return $null
+}
+
+function Copy-ProbeArtifact {
+    param(
+        [System.IO.FileInfo]$File,
+        [string]$Destination
+    )
+
+    if ($File -and (Test-Path -LiteralPath $File.FullName)) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+        Copy-Item -LiteralPath $File.FullName -Destination $Destination -Force
+    }
+}
+
+function Copy-DllArtifacts {
+    param(
+        [System.IO.FileInfo]$Executable,
+        [string]$DependencyBin,
+        [string]$Destination
+    )
+
+    if (-not $Executable) {
+        return
+    }
+
+    $dllDestination = Join-Path $Destination "dlls"
+    New-Item -ItemType Directory -Force -Path $dllDestination | Out-Null
+
+    $exeDir = Split-Path $Executable.FullName -Parent
+    Get-ChildItem -Path $exeDir -File -Filter "*.dll" -ErrorAction SilentlyContinue |
+        Copy-Item -Destination $dllDestination -Force
+
+    if (Test-Path $DependencyBin) {
+        Get-ChildItem -Path $DependencyBin -File -Filter "*.dll" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $dllDestination -Force
+    }
+}
+
 $script:PhaseStart = @{}
 $script:PhaseEvents = @()
 $script:PhaseLog = $null
@@ -121,6 +171,10 @@ $logsDir = Join-Path $repoRoot "msvc-probe-logs"
 $artifactsDir = Join-Path $repoRoot "msvc-probe-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
+$finalExecutable = $null
+$finalPdb = $null
+$pdbReferenceCheck = "not_run"
+$cv2pdbCheck = "not_run"
 
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
@@ -406,6 +460,78 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     }
 }
 
+if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
+    Start-Phase "full validation"
+    try {
+        $finalExecutable = Find-FinalExecutable -Root $buildPath
+        if (-not $finalExecutable) {
+            Write-Warning "FAIL: xemu/qemu-system-i386 executable was not found."
+            Get-ChildItem -Path $buildPath -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName |
+                Set-Content -Path (Join-Path $logsDir "exe-files.txt")
+            $buildExit = 1
+        } else {
+            Write-Host "Binary found: $($finalExecutable.FullName)"
+
+            $matchingPdb = Join-Path $finalExecutable.DirectoryName "$($finalExecutable.BaseName).pdb"
+            if (Test-Path $matchingPdb) {
+                $finalPdb = Get-Item $matchingPdb
+            } else {
+                Write-Warning "Matching PDB was not found next to the binary: $matchingPdb"
+                Get-ChildItem -Path $buildPath -Recurse -File -Filter "*.pdb" -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty FullName |
+                    Set-Content -Path (Join-Path $logsDir "pdb-files.txt")
+
+                $fallbackPdb = Join-Path $buildPath "xemu.pdb"
+                if (Test-Path $fallbackPdb) {
+                    $finalPdb = Get-Item $fallbackPdb
+                } else {
+                    Write-Warning "FAIL: final PDB was not found."
+                    $buildExit = 1
+                }
+            }
+
+            if ($finalPdb) {
+                Write-Host "PDB found: $($finalPdb.FullName)"
+            }
+
+            $dumpbinOutput = & dumpbin.exe /headers $finalExecutable.FullName 2>&1
+            $dumpbinOutput | Set-Content -Path (Join-Path $logsDir "dumpbin-headers.txt")
+            $dumpbinExit = $LASTEXITCODE
+            if ($dumpbinExit -ne 0 -or -not ($dumpbinOutput | Select-String -Pattern "RSDS|PDB" -CaseSensitive:$false)) {
+                Write-Warning "FAIL: no CodeView/RSDS/PDB reference was found in the binary."
+                $pdbReferenceCheck = "failed"
+                $buildExit = 1
+            } else {
+                Write-Host "OK: CodeView/RSDS/PDB reference found in binary."
+                $pdbReferenceCheck = "passed"
+            }
+        }
+
+        $buildNinja = Join-Path $buildPath "build.ninja"
+        if (Test-Path $buildNinja) {
+            $cv2pdbMatches = Select-String -Path $buildNinja -Pattern "cv2pdb" -CaseSensitive:$false
+            if ($cv2pdbMatches) {
+                Write-Warning "FAIL: cv2pdb was found in the MSVC build system."
+                $cv2pdbMatches |
+                    ForEach-Object { "$($_.Path):$($_.LineNumber): $($_.Line)" } |
+                    Set-Content -Path (Join-Path $logsDir "cv2pdb-matches.txt")
+                $cv2pdbCheck = "found"
+                $buildExit = 1
+            } else {
+                Write-Host "OK: cv2pdb not present in the MSVC build system."
+                $cv2pdbCheck = "absent"
+            }
+        } else {
+            Write-Warning "FAIL: build.ninja was not found for cv2pdb validation."
+            $cv2pdbCheck = "missing_build_ninja"
+            $buildExit = 1
+        }
+    } finally {
+        End-Phase "full validation"
+    }
+}
+
 Start-Phase "artifact collection"
 if (Test-Path (Join-Path $buildPath "config.log")) {
     Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
@@ -413,12 +539,21 @@ if (Test-Path (Join-Path $buildPath "config.log")) {
 if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
     Copy-Item (Join-Path $buildPath "meson-logs\meson-log.txt") (Join-Path $logsDir "meson-log.txt") -Force
 }
+if ($BuildScope -eq "full") {
+    Copy-ProbeArtifact -File $finalExecutable -Destination $artifactsDir
+    Copy-ProbeArtifact -File $finalPdb -Destination $artifactsDir
+    Copy-DllArtifacts -Executable $finalExecutable -DependencyBin $vcpkgBin -Destination $artifactsDir
+}
 
 @(
     "configure_exit_code=$configureExit",
     "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
     "build_scope=$BuildScope",
-    "strict=$Strict"
+    "strict=$Strict",
+    "xemu_exe=$(if ($finalExecutable) { $finalExecutable.FullName } else { 'not_found' })",
+    "xemu_pdb=$(if ($finalPdb) { $finalPdb.FullName } else { 'not_found' })",
+    "pdb_reference_check=$pdbReferenceCheck",
+    "cv2pdb_check=$cv2pdbCheck"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 End-Phase "artifact collection"
 
