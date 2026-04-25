@@ -58,7 +58,11 @@ def add_once(out, value):
         out.append(value)
 
 
-def append_std_flag(out, value):
+def append_std_flag(out, value, compiler_name=""):
+    if compiler_name.startswith("clang-cl") and value.startswith("gnu"):
+        out.append(f"/clang:-std={value}")
+        return
+
     value = value.replace("gnu", "c", 1)
     if value in {"c11", "c17"}:
         out.append(f"/std:{value}")
@@ -112,7 +116,7 @@ def append_linker_item(link, report, item):
     return False
 
 
-def translate_args(args):
+def translate_args(args, compiler_name=""):
     compile_only = False
     preprocess_only = False
     assemble_only = False
@@ -215,7 +219,7 @@ def translate_args(args):
             append_translated(out, report, arg, "/O2")
         elif arg.startswith("-std="):
             before = list(out)
-            append_std_flag(out, arg.split("=", 1)[1])
+            append_std_flag(out, arg.split("=", 1)[1], compiler_name)
             for value in out[len(before):]:
                 report["translated"].append((arg, value))
         elif arg.startswith("-Wl,"):
@@ -345,7 +349,7 @@ def main():
         print("x86_64-pc-windows-msvc")
         return 0
 
-    translated, report, depinfo = translate_args(args)
+    translated, report, depinfo = translate_args(args, compiler_name)
     emit_report(compiler, translated, report)
 
     result = subprocess.run([compiler, *translated])
