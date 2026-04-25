@@ -396,17 +396,17 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 
 if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     $compileTarget = ""
-    if ($BuildScope -eq "fast") {
-        $targetsLog = Join-Path $logsDir "meson-targets.json"
-        Push-Location $buildPath
-        try {
-            Start-Phase "meson introspect"
-            & $buildPython -m mesonbuild.mesonmain introspect . --targets 2>&1 |
-                Tee-Object -FilePath $targetsLog
-            if ($LASTEXITCODE -ne 0) {
-                $buildExit = $LASTEXITCODE
-            } else {
-                $targets = Get-Content -Raw $targetsLog | ConvertFrom-Json
+    $targetsLog = Join-Path $logsDir "meson-targets.json"
+    Push-Location $buildPath
+    try {
+        Start-Phase "meson introspect"
+        & $buildPython -m mesonbuild.mesonmain introspect . --targets 2>&1 |
+            Tee-Object -FilePath $targetsLog
+        if ($LASTEXITCODE -ne 0) {
+            $buildExit = $LASTEXITCODE
+        } else {
+            $targets = Get-Content -Raw $targetsLog | ConvertFrom-Json
+            if ($BuildScope -eq "fast") {
                 $qemuUtilTarget = @($targets | Where-Object {
                     $_.name -eq "qemuutil" -or
                     $_.id -match "qemuutil" -or
@@ -425,18 +425,42 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
                     Write-Warning "Could not find qemuutil/libqemuutil target in Meson introspection output."
                     $buildExit = 1
                 }
+            } else {
+                $emulatorTarget = $null
+                foreach ($name in @("xemu", "qemu-system-i386w", "qemu-system-i386")) {
+                    $emulatorTarget = @($targets | Where-Object {
+                        $_.name -eq $name -or $_.id -eq $name
+                    } | Select-Object -First 1)
+                    if ($emulatorTarget) {
+                        break
+                    }
+                }
+
+                if ($emulatorTarget) {
+                    if ($emulatorTarget.name) {
+                        $compileTarget = $emulatorTarget.name
+                    } elseif ($emulatorTarget.id) {
+                        $compileTarget = $emulatorTarget.id
+                    } else {
+                        Write-Warning "Found final emulator target, but Meson introspection did not include a target name or id."
+                        $buildExit = 1
+                    }
+                } else {
+                    Write-Warning "Could not find xemu/qemu-system-i386 target in Meson introspection output."
+                    $buildExit = 1
+                }
             }
-        } finally {
-            End-Phase "meson introspect"
-            Pop-Location
         }
+    } finally {
+        End-Phase "meson introspect"
+        Pop-Location
     }
 
     if ($null -eq $buildExit -or $buildExit -eq 0) {
         if ($BuildScope -eq "fast") {
             $compileLine = "echo Fast MSVC probe target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
         } else {
-            $compileLine = "echo Full MSVC probe build; python -m mesonbuild.mesonmain compile -C . --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
+            $compileLine = "echo Full MSVC probe target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
         }
 
         $buildCommand = @(
