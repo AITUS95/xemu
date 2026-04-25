@@ -8,6 +8,7 @@
 # should grow only as CI logs prove another translation is needed.
 
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -281,9 +282,13 @@ def main():
 
     compiler = sys.argv[1]
     args = sys.argv[2:]
+    compiler_name = Path(compiler).name.lower()
 
     if "--version" in args or "-v" in args:
-        subprocess.run([compiler, "/Bv"], check=False)
+        if compiler_name.startswith("clang-cl"):
+            subprocess.run([compiler, "--version"], check=False)
+        else:
+            subprocess.run([compiler, "/Bv"], check=False)
         return 0
 
     translated, report = translate_args(args)

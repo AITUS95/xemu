@@ -131,8 +131,14 @@ Write-Host "Scope:      $BuildScope"
 Write-Host "vcpkg:      $VcpkgTriplet"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
+where.exe clang-cl 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "where-clang-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
+$compilerCommand = "cl.exe"
+if (Get-Command clang-cl.exe -ErrorAction SilentlyContinue) {
+    $compilerCommand = "clang-cl.exe"
+}
+Write-Host "Compiler:   $compilerCommand"
 End-Phase "toolchain setup"
 
 Start-Phase "vcpkg dependency install"
@@ -214,7 +220,7 @@ $wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
 $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
 @(
     "@echo off",
-    "python `"$wrapperPy`" cl.exe %*",
+    "python `"$wrapperPy`" $compilerCommand %*",
     "exit /b %ERRORLEVEL%"
 ) | Set-Content -Path $localCompiler -Encoding ASCII
 
