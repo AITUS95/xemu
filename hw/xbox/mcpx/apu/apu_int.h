@@ -23,6 +23,9 @@
 
 #include "qemu/osdep.h"
 #include <math.h>
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
 #include <SDL3/SDL.h>
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
