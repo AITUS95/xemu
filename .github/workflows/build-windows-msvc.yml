@@ -72,14 +72,15 @@ jobs:
             C:\vcpkg\downloads
             C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'scripts/ci/**', 'meson.build', 'subprojects/*.wrap') }}
+          key: msvc-vcpkg-${{ runner.os }}-v1
           restore-keys: |
             msvc-vcpkg-${{ runner.os }}-
+          save-always: true
 
       - name: Run MSVC fast build probe
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_scope == 'fast' }}
         shell: pwsh
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
           STRICT: ${{ inputs.strict || 'false' }}
           EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
