@@ -31,9 +31,14 @@
 #include <misc/cpp/imgui_stdlib.h>
 #include <stb_image.h>
 
+#include "qemu/osdep.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 extern "C" {
 // Include necessary QEMU headers
-#include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "system/runstate.h"
 #include "hw/xbox/mcpx/apu/apu_debug.h"

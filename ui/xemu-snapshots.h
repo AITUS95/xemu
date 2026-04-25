@@ -20,13 +20,14 @@
 #ifndef XEMU_SNAPSHOTS_H
 #define XEMU_SNAPSHOTS_H
 
+#include "qemu/osdep.h"
+#include <epoxy/gl.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "qemu/osdep.h"
 #include "block/snapshot.h"
-#include <epoxy/gl.h>
 
 #define XEMU_SNAPSHOT_DATA_MAGIC 0x78656d75 // 'xemu'
 #define XEMU_SNAPSHOT_DATA_VERSION 1

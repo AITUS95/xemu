@@ -22,8 +22,9 @@
 #include <stdint.h>
 #include <functional>
 
-extern "C" {
 #include "qemu/osdep.h"
+
+extern "C" {
 #include "qemu/thread.h"
 #include "qemu/http.h"
 }
