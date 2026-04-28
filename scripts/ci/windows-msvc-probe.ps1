@@ -163,6 +163,19 @@ function Copy-ProbeArtifact {
     }
 }
 
+function Publish-LogsArtifact {
+    param(
+        [string]$LogsDir,
+        [string]$LogsArtifactRoot
+    )
+
+    if (Test-Path $LogsArtifactRoot) {
+        Remove-Item -Recurse -Force $LogsArtifactRoot
+    }
+    New-Item -ItemType Directory -Force -Path $LogsArtifactRoot | Out-Null
+    Copy-Item -LiteralPath $LogsDir -Destination $LogsArtifactRoot -Recurse -Force
+}
+
 function Get-DumpbinDependentNames {
     param(
         [string]$BinaryPath,
@@ -362,6 +375,7 @@ Start-Phase "probe"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDir = Join-Path $repoRoot "msvc-probe-logs"
+$logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
 $artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
@@ -373,8 +387,10 @@ $runtimeSmokeCheck = "not_run"
 $packagedArtifact = "not_run"
 
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsArtifactRoot
 New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
+New-Item -ItemType File -Force -Path $wrapperLog | Out-Null
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $artifactsRoot
 New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 $script:PhaseLog = Join-Path $logsDir "phase-timings.log"
@@ -526,7 +542,7 @@ $configureCommand = @(
     "export DLLTOOL=:",
     "export RANLIB=:",
     "export STRIP=:",
-    "export MSVC_CL_WRAPPER_TRACE=link",
+    "export MSVC_CL_WRAPPER_TRACE=unknown",
     "export MSVC_CL_WRAPPER_BUILD_CONFIG=`"${BuildConfig}`"",
     "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
     "export PATH=`"${probePathBash}`"",
@@ -676,7 +692,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
             "export DLLTOOL=:",
             "export RANLIB=:",
             "export STRIP=:",
-            "export MSVC_CL_WRAPPER_TRACE=link",
+            "export MSVC_CL_WRAPPER_TRACE=unknown",
             "export MSVC_CL_WRAPPER_BUILD_CONFIG=`"${BuildConfig}`"",
             "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
             "export PATH=`"${probePathBash}`"",
@@ -855,6 +871,7 @@ if ($configureExit -ne 0) {
     Write-Warning "Windows MSVC native configure failed with exit code $configureExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
+        Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
         exit $configureExit
     }
 }
@@ -862,9 +879,11 @@ if ($null -ne $buildExit -and $buildExit -ne 0) {
     Write-Warning "Windows MSVC native build failed with exit code $buildExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
+        Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
         exit $buildExit
     }
 }
 
 End-Phase "probe"
+Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
 exit 0

@@ -54,6 +54,12 @@ IGNORED_LINKER_FLAGS = {
     "relro",
 }
 
+KNOWN_PASSTHROUGH_FLAGS = {
+    "-",
+    "--print-search-dirs",
+    "-dM",
+}
+
 BUILD_CONFIG = os.environ.get("MSVC_CL_WRAPPER_BUILD_CONFIG", "profile").lower()
 LINKER_MACHINE = os.environ.get("MSVC_CL_WRAPPER_MACHINE", "X64").upper()
 COMPILER_RT_MACHINE = {
@@ -323,6 +329,15 @@ def translate_args(args, compiler_name=""):
             append_translated(out, report, f"{arg} {args[i]}", "/I" + args[i])
         elif arg.startswith("-isystem") and len(arg) > len("-isystem"):
             append_translated(out, report, arg, "/I" + arg[len("-isystem"):])
+        elif arg == "-x":
+            out.append(arg)
+            if i + 1 < len(args):
+                i += 1
+                out.append(args[i])
+        elif arg in KNOWN_PASSTHROUGH_FLAGS:
+            out.append(arg)
+        elif arg == "-fpermissive":
+            ignore_flag(report, arg)
         elif arg == "-ftrivial-auto-var-init=zero":
             if compiler_name.startswith("clang-cl"):
                 append_translated(out, report, arg, "/clang:-ftrivial-auto-var-init=zero")
@@ -445,10 +460,11 @@ def emit_report(compiler, translated, report, is_link=False):
     lines = [
         f"[msvc-cl-wrapper] Command: {compiler} {' '.join(translated)}",
     ]
-    if report["translated"]:
+    include_details = trace_all or (trace_link and is_link)
+    if include_details and report["translated"]:
         lines.append("[msvc-cl-wrapper] Translated flags:")
         lines.extend(f"  {source} -> {target}" for source, target in report["translated"])
-    if report["ignored"]:
+    if include_details and report["ignored"]:
         lines.append("[msvc-cl-wrapper] Ignored GCC flags (safe to skip):")
         lines.extend(f"  {value}" for value in report["ignored"])
     if report["unknown"]:

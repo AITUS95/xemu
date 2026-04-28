@@ -1,5 +1,6 @@
 /GNUmakefile
 /build/
+/build-msvc/
 /.cache/
 /.vscode/
 *.pyc
@@ -22,6 +23,9 @@ GTAGS
 
 build.log
 /dist
+/msvc-native-artifacts/
+/msvc-probe-logs/
+/xemu-msvc-logs/
 /xemu.ini
 /macos-libs/
 /macos-pkgs/
