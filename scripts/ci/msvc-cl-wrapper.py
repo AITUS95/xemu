@@ -57,7 +57,11 @@ IGNORED_LINKER_FLAGS = {
 KNOWN_PASSTHROUGH_FLAGS = {
     "-",
     "--print-search-dirs",
+    "-?",
     "-dM",
+    "-fchar8_t",
+    "-ferror-limit=5",
+    "-fmax-errors=5",
 }
 
 BUILD_CONFIG = os.environ.get("MSVC_CL_WRAPPER_BUILD_CONFIG", "profile").lower()
@@ -218,6 +222,25 @@ def append_linker_item(link, report, item):
     if item in IGNORED_LINKER_FLAGS or item.startswith("--build-id"):
         ignore_flag(report, item)
         return item in {"-rpath", "-rpath-link", "-z"}
+    if item == "-WX":
+        link.append("/WX")
+        report["translated"].append((item, "/WX"))
+        return False
+    if item == "--dynamicbase":
+        link.append("/DYNAMICBASE")
+        report["translated"].append((item, "/DYNAMICBASE"))
+        return False
+    if item == "--high-entropy-va":
+        link.append("/HIGHENTROPYVA")
+        report["translated"].append((item, "/HIGHENTROPYVA"))
+        return False
+    if item == "--nxcompat":
+        link.append("/NXCOMPAT")
+        report["translated"].append((item, "/NXCOMPAT"))
+        return False
+    if item == "--no-seh":
+        ignore_flag(report, item)
+        return False
     if item.startswith("-l") and len(item) > 2:
         translated = item[2:] + ".lib"
         link.append(translated)
@@ -284,6 +307,10 @@ def translate_args(args, compiler_name=""):
         elif lower_arg == "/s":
             assemble_only = True
             out.append(arg)
+        elif arg == "-TP":
+            append_translated(out, report, arg, "/TP")
+        elif arg == "--":
+            ignore_flag(report, arg)
         elif arg == "-o":
             i += 1
             if i >= len(args):
@@ -347,6 +374,10 @@ def translate_args(args, compiler_name=""):
             ignore_flag(report, arg)
         elif arg in DANGEROUS_FLAGS:
             warn_flag(report, arg)
+        elif arg == "-WX":
+            append_translated(out, report, arg, "/WX")
+        elif arg == "-MDd":
+            append_translated_once(out, report, arg, "/MD")
         elif arg in {"-g", "-g3", "-ggdb", "-gdwarf-4"}:
             append_translated_once(out, report, arg, "/Zi")
         elif lower_arg == "/z7":
@@ -358,6 +389,11 @@ def translate_args(args, compiler_name=""):
         elif arg.startswith("-std="):
             before = list(out)
             append_std_flag(out, arg.split("=", 1)[1], compiler_name)
+            for value in out[len(before):]:
+                report["translated"].append((arg, value))
+        elif arg.startswith("-std:"):
+            before = list(out)
+            append_std_flag(out, arg.split(":", 1)[1], compiler_name)
             for value in out[len(before):]:
                 report["translated"].append((arg, value))
         elif arg.startswith("-Wl,"):
