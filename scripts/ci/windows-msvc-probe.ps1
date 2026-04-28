@@ -590,6 +590,7 @@ Start-Phase "probe"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDirName = if ($env:MSVC_PROBE_LOGS_DIR_NAME) { $env:MSVC_PROBE_LOGS_DIR_NAME } else { "msvc-probe-logs" }
 $logsDir = Join-Path $repoRoot $logsDirName
+$logsDirBash = "../$logsDirName"
 $logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
 $artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
@@ -749,7 +750,7 @@ $configureLine = $configureArgs -join " "
 if ($ExtraConfigureArgs) {
     $configureLine += " $ExtraConfigureArgs"
 }
-$configureLine += " > ../msvc-probe-logs/configure-output.log 2>&1"
+$configureLine += " > ${logsDirBash}/configure-output.log 2>&1"
 
 $configureCommand = @(
     "set -o pipefail",
@@ -820,7 +821,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
         "cat ../scripts/xemu-version.sh",
         "bash -n ../scripts/xemu-version.sh",
         "sh -n ../scripts/xemu-version.sh",
-        "sh -x ../scripts/xemu-version.sh `"${repoRootMeson}`" 2>&1 | tee ../msvc-probe-logs/xemu-version-diagnostics.log; xemu_version_exit=`${PIPESTATUS[0]}; echo xemu_version_exit=`$xemu_version_exit; test `$xemu_version_exit -eq 0"
+        "sh -x ../scripts/xemu-version.sh `"${repoRootMeson}`" 2>&1 | tee ${logsDirBash}/xemu-version-diagnostics.log; xemu_version_exit=`${PIPESTATUS[0]}; echo xemu_version_exit=`$xemu_version_exit; test `$xemu_version_exit -eq 0"
     ) -join "; "
 
     Push-Location $buildPath
@@ -899,7 +900,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     }
 
     if ($null -eq $buildExit -or $buildExit -eq 0) {
-        $compileLine = "echo Windows MSVC native ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ../msvc-probe-logs/build-output.log 2>&1"
+        $compileLine = "echo Windows MSVC native ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ${logsDirBash}/build-output.log 2>&1"
 
         $buildCommand = @(
             "set -o pipefail",
