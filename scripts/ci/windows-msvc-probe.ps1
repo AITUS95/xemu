@@ -368,13 +368,228 @@ function Invoke-RuntimeSmokeTest {
     return $result
 }
 
+function Get-PowerShellHostPath {
+    $preferred = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh" } else { "powershell" }
+    $command = Get-Command $preferred -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $current = Get-Process -Id $PID
+    if ($current.Path) {
+        return $current.Path
+    }
+
+    throw "Could not locate a PowerShell host for build_config=all."
+}
+
+function Get-StatusValue {
+    param(
+        [string]$StatusPath,
+        [string]$Key
+    )
+
+    if (-not (Test-Path $StatusPath)) {
+        return "missing"
+    }
+
+    $line = Get-Content -Path $StatusPath |
+        Where-Object { $_ -match "^$([regex]::Escape($Key))=" } |
+        Select-Object -First 1
+    if (-not $line) {
+        return "missing"
+    }
+
+    return $line.Substring($Key.Length + 1)
+}
+
+function Invoke-AllBuildConfigs {
+    param(
+        [string]$Architecture,
+        [string]$QemuCpu,
+        [string]$BuildScope,
+        [string]$VcpkgTriplet,
+        [string]$ExtraConfigureArgs,
+        [switch]$Strict
+    )
+
+    if ($BuildScope -ne "full") {
+        throw "build_config=all is only supported with build_scope=full."
+    }
+
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    $logsDir = Join-Path $repoRoot "msvc-probe-logs"
+    $logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
+    $artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
+    $phaseLog = Join-Path $logsDir "phase-timings.log"
+
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsDir, $logsArtifactRoot, $artifactsRoot
+    New-Item -ItemType Directory -Force -Path $logsDir, $artifactsRoot | Out-Null
+
+    $startedAt = Get-Date
+    "[$($startedAt.ToString("yyyy-MM-dd HH:mm:ss"))] BEGIN all configs" | Set-Content -Path $phaseLog
+
+    $powerShellHost = Get-PowerShellHostPath
+    $configs = @("debug", "profile", "release")
+    $statusLines = @(
+        "build_scope=$BuildScope",
+        "build_config=all",
+        "strict=$Strict"
+    )
+    $buildExitAggregate = 0
+    $configureExitAggregate = 0
+
+    foreach ($config in $configs) {
+        $configStartedAt = Get-Date
+        Add-Content -Path $phaseLog -Value "[$($configStartedAt.ToString("yyyy-MM-dd HH:mm:ss"))] BEGIN $config"
+
+        $childBuildDir = "build-msvc-$config"
+        $childLogsName = "msvc-probe-logs-$config"
+        $childLogsDir = Join-Path $repoRoot $childLogsName
+        $configLogsDir = Join-Path $logsDir $config
+        $consoleLog = Join-Path $logsDir "all-$config-console.log"
+
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $childLogsDir, $configLogsDir
+
+        $savedEnv = @{}
+        foreach ($name in @("MSVC_PROBE_ALL_CHILD", "MSVC_PROBE_LOGS_DIR_NAME", "MSVC_PROBE_KEEP_ARTIFACTS")) {
+            $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+        }
+
+        try {
+            $env:MSVC_PROBE_ALL_CHILD = "1"
+            $env:MSVC_PROBE_LOGS_DIR_NAME = $childLogsName
+            $env:MSVC_PROBE_KEEP_ARTIFACTS = "1"
+
+            $childArgs = @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $PSCommandPath,
+                "-Architecture", $Architecture,
+                "-QemuCpu", $QemuCpu,
+                "-BuildDir", $childBuildDir,
+                "-BuildScope", $BuildScope,
+                "-BuildConfig", $config,
+                "-VcpkgTriplet", $VcpkgTriplet,
+                "-ExtraConfigureArgs", $ExtraConfigureArgs
+            )
+            if ($Strict) {
+                $childArgs += "-Strict"
+            }
+
+            & $powerShellHost @childArgs *> $consoleLog
+            $childExit = $LASTEXITCODE
+        } finally {
+            foreach ($name in $savedEnv.Keys) {
+                if ($null -eq $savedEnv[$name]) {
+                    Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+                } else {
+                    Set-Item -Path "Env:$name" -Value $savedEnv[$name]
+                }
+            }
+        }
+
+        Write-Host "Windows MSVC native $config exit code: $childExit"
+        Write-Host "Last 80 lines of ${consoleLog}:"
+        Get-Content -Path $consoleLog -Tail 80
+
+        if (Test-Path $childLogsDir) {
+            Copy-Item -LiteralPath $childLogsDir -Destination $configLogsDir -Recurse -Force
+        } else {
+            "missing child logs: $childLogsDir" | Set-Content -Path (Join-Path $logsDir "$config-missing-logs.txt")
+        }
+
+        $statusPath = Join-Path $configLogsDir "status.txt"
+        $configConfigureExit = Get-StatusValue -StatusPath $statusPath -Key "configure_exit_code"
+        $configBuildExit = Get-StatusValue -StatusPath $statusPath -Key "build_exit_code"
+        $statusLines += "$config.configure_exit_code=$configConfigureExit"
+        $statusLines += "$config.build_exit_code=$configBuildExit"
+        $statusLines += "$config.pdb_reference_check=$(Get-StatusValue -StatusPath $statusPath -Key "pdb_reference_check")"
+        $statusLines += "$config.cv2pdb_check=$(Get-StatusValue -StatusPath $statusPath -Key "cv2pdb_check")"
+        $statusLines += "$config.runtime_smoke_check=$(Get-StatusValue -StatusPath $statusPath -Key "runtime_smoke_check")"
+        $statusLines += "$config.packaged_artifact=$(Get-StatusValue -StatusPath $statusPath -Key "packaged_artifact")"
+
+        if ($configConfigureExit -ne "0") {
+            $configureExitAggregate = 1
+        }
+        if ($childExit -ne 0 -or $configBuildExit -ne "0") {
+            $buildExitAggregate = if ($childExit -ne 0) { $childExit } else { 1 }
+        }
+
+        $configElapsed = (Get-Date) - $configStartedAt
+        Add-Content -Path $phaseLog -Value ("[$((Get-Date).ToString("yyyy-MM-dd HH:mm:ss"))] END {0} duration={1:n1}s" -f $config, $configElapsed.TotalSeconds)
+    }
+
+    $aggregateLogs = @{
+        "artifact-layout.log" = "artifact-layout.log"
+        "dependents.log" = "dependents.log"
+        "runtime-smoke.log" = "runtime-smoke.log"
+        "dumpbin-headers.txt" = "dumpbin-headers.txt"
+    }
+    foreach ($entry in $aggregateLogs.GetEnumerator()) {
+        $aggregatePath = Join-Path $logsDir $entry.Key
+        "build_config=all" | Set-Content -Path $aggregatePath
+        foreach ($config in $configs) {
+            $sourcePath = Join-Path (Join-Path $logsDir $config) $entry.Value
+            Add-Content -Path $aggregatePath -Value "===== $config ====="
+            if (Test-Path $sourcePath) {
+                Get-Content -Path $sourcePath | Add-Content -Path $aggregatePath
+            } else {
+                Add-Content -Path $aggregatePath -Value "not_found"
+            }
+        }
+    }
+
+    $totalElapsed = (Get-Date) - $startedAt
+    Add-Content -Path $phaseLog -Value ("[$((Get-Date).ToString("yyyy-MM-dd HH:mm:ss"))] END all configs duration={0:n1}s" -f $totalElapsed.TotalSeconds)
+
+    @(
+        "configure_exit_code=$configureExitAggregate",
+        "build_exit_code=$buildExitAggregate"
+    ) + $statusLines + @(
+        "xemu_exe=see_config_logs",
+        "xemu_pdb=see_config_logs",
+        "pdb_reference_check=see_config_logs",
+        "cv2pdb_check=see_config_logs",
+        "runtime_smoke_check=see_config_logs",
+        "packaged_artifact=$artifactsRoot"
+    ) | Set-Content -Path (Join-Path $logsDir "status.txt")
+
+    Write-Host "Status summary:"
+    Get-Content -Path (Join-Path $logsDir "status.txt")
+    Write-Host "Phase timings:"
+    Get-Content -Path $phaseLog
+
+    Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
+
+    if ($Strict -and ($configureExitAggregate -ne 0 -or $buildExitAggregate -ne 0)) {
+        if ($buildExitAggregate -ne 0) {
+            exit $buildExitAggregate
+        }
+        exit $configureExitAggregate
+    }
+
+    exit 0
+}
+
+if ($BuildConfig -eq "all" -and -not $env:MSVC_PROBE_ALL_CHILD) {
+    Invoke-AllBuildConfigs `
+        -Architecture $Architecture `
+        -QemuCpu $QemuCpu `
+        -BuildScope $BuildScope `
+        -VcpkgTriplet $VcpkgTriplet `
+        -ExtraConfigureArgs $ExtraConfigureArgs `
+        -Strict:$Strict
+}
+
 $script:PhaseStart = @{}
 $script:PhaseEvents = @()
 $script:PhaseLog = $null
 Start-Phase "probe"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$logsDir = Join-Path $repoRoot "msvc-probe-logs"
+$logsDirName = if ($env:MSVC_PROBE_LOGS_DIR_NAME) { $env:MSVC_PROBE_LOGS_DIR_NAME } else { "msvc-probe-logs" }
+$logsDir = Join-Path $repoRoot $logsDirName
 $logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
 $artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
@@ -386,12 +601,15 @@ $cv2pdbCheck = "not_run"
 $runtimeSmokeCheck = "not_run"
 $packagedArtifact = "not_run"
 
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsDir
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsArtifactRoot
-New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
 New-Item -ItemType File -Force -Path $wrapperLog | Out-Null
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $artifactsRoot
+$keepArtifacts = $env:MSVC_PROBE_KEEP_ARTIFACTS -in @("1", "true", "yes")
+if (-not $keepArtifacts) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $artifactsRoot
+}
 New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 $script:PhaseLog = Join-Path $logsDir "phase-timings.log"
 $script:PhaseEvents | Set-Content -Path $script:PhaseLog

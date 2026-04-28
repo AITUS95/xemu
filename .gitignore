@@ -1,6 +1,9 @@
 /GNUmakefile
 /build/
 /build-msvc/
+/build-msvc-debug/
+/build-msvc-profile/
+/build-msvc-release/
 /.cache/
 /.vscode/
 *.pyc
