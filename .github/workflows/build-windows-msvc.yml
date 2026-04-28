@@ -12,6 +12,7 @@ on:
       - ".github/workflows/**"
       - "scripts/ci/**"
       - "include/**"
+      - "host/**"
       - "hw/**"
       - "ui/**"
       - "util/**"
