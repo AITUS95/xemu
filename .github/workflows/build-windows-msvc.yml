@@ -1,4 +1,4 @@
-name: Build for Windows (MSVC probe)
+name: Windows MSVC Native Build
 
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
@@ -23,15 +23,26 @@ on:
   workflow_dispatch:
     inputs:
       build_scope:
-        description: "MSVC probe scope"
+        description: "MSVC native build scope"
         required: false
         default: "fast"
         type: choice
         options:
           - fast
+          - core
           - full
+      build_config:
+        description: "MSVC native build configuration"
+        required: false
+        default: "profile"
+        type: choice
+        options:
+          - debug
+          - profile
+          - release
+          - all
       strict:
-        description: Fail the workflow when the MSVC probe fails
+        description: Fail the workflow when MSVC native validation fails
         required: false
         type: boolean
         default: false
@@ -42,7 +53,7 @@ on:
         default: ""
 
 concurrency:
-  group: msvc-probe-${{ github.ref }}
+  group: windows-msvc-native-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -80,27 +91,12 @@ jobs:
             msvc-vcpkg-${{ runner.os }}-v1-
             msvc-vcpkg-${{ runner.os }}-
 
-      - name: Run MSVC fast build probe
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_scope == 'fast' }}
-        shell: pwsh
-        timeout-minutes: 40
-        env:
-          STRICT: ${{ inputs.strict || 'false' }}
-          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
-        run: |
-          $strict = [System.Convert]::ToBoolean($env:STRICT)
-          .\scripts\ci\windows-msvc-probe.ps1 `
-            -Architecture "${{ matrix.vc_arch }}" `
-            -QemuCpu "${{ matrix.qemu_cpu }}" `
-            -BuildScope "fast" `
-            -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
-            -Strict:$strict
-
-      - name: Run MSVC full build probe
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+      - name: Run Windows MSVC Native Build
         shell: pwsh
         timeout-minutes: 60
         env:
+          BUILD_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope || 'fast' }}
+          BUILD_CONFIG: ${{ github.event_name == 'workflow_dispatch' && inputs.build_config || 'profile' }}
           STRICT: ${{ inputs.strict || 'false' }}
           EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
         run: |
@@ -108,7 +104,8 @@ jobs:
           .\scripts\ci\windows-msvc-probe.ps1 `
             -Architecture "${{ matrix.vc_arch }}" `
             -QemuCpu "${{ matrix.qemu_cpu }}" `
-            -BuildScope "full" `
+            -BuildScope "$env:BUILD_SCOPE" `
+            -BuildConfig "$env:BUILD_CONFIG" `
             -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
             -Strict:$strict
 
@@ -123,12 +120,34 @@ jobs:
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Upload MSVC probe logs
+      - name: Upload MSVC native logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: msvc-probe-${{ matrix.arch }}
-          path: |
-            msvc-probe-logs
-            msvc-probe-artifacts
+          name: xemu-msvc-logs
+          path: msvc-probe-logs
           if-no-files-found: warn
+
+      - name: Upload MSVC release artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: xemu-msvc-release
+          path: msvc-native-artifacts/release
+          if-no-files-found: ignore
+
+      - name: Upload MSVC debug artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: xemu-msvc-debug
+          path: msvc-native-artifacts/debug
+          if-no-files-found: ignore
+
+      - name: Upload MSVC profiling artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: xemu-msvc-profiling
+          path: msvc-native-artifacts/profile
+          if-no-files-found: ignore

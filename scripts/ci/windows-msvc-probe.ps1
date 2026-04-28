@@ -2,8 +2,10 @@ param(
     [string]$Architecture = "amd64",
     [string]$QemuCpu = "x86_64",
     [string]$BuildDir = "build-msvc",
-    [ValidateSet("fast", "full")]
+    [ValidateSet("fast", "core", "full")]
     [string]$BuildScope = "fast",
+    [ValidateSet("debug", "profile", "release", "all")]
+    [string]$BuildConfig = "profile",
     [string]$VcpkgTriplet = "x64-windows",
     [string]$ExtraConfigureArgs = "",
     [switch]$Strict
@@ -81,6 +83,30 @@ function Invoke-LoggedCommand {
     $script:LastCommandExitCode = $LASTEXITCODE
 }
 
+function Write-LogSummary {
+    param(
+        [string]$Path,
+        [int]$Tail = 200
+    )
+
+    if (-not (Test-Path $Path)) {
+        Write-Host "Log not found: $Path"
+        return
+    }
+
+    $patterns = "FAILED:|error C[0-9]+|fatal error|LINK : fatal|LNK[0-9]+|ninja: build stopped|Traceback|Exception|ERROR:"
+    Write-Host "First relevant errors in ${Path}:"
+    $matches = Select-String -Path $Path -Pattern $patterns -CaseSensitive:$false | Select-Object -First 80
+    if ($matches) {
+        $matches | ForEach-Object { Write-Host "$($_.LineNumber): $($_.Line)" }
+    } else {
+        Write-Host "(none)"
+    }
+
+    Write-Host "Last $Tail lines of ${Path}:"
+    Get-Content -Path $Path -Tail $Tail
+}
+
 function Log-Phase {
     param([string]$Message)
 
@@ -137,28 +163,196 @@ function Copy-ProbeArtifact {
     }
 }
 
-function Copy-DllArtifacts {
+function Get-DumpbinDependentNames {
+    param(
+        [string]$BinaryPath,
+        [string]$LogPath
+    )
+
+    if (-not (Test-Path -LiteralPath $BinaryPath)) {
+        return @()
+    }
+
+    $output = & dumpbin.exe /dependents $BinaryPath 2>&1
+    Add-Content -Path $LogPath -Value "===== dumpbin /dependents $BinaryPath ====="
+    Add-Content -Path $LogPath -Value $output
+    Add-Content -Path $LogPath -Value ""
+
+    $output |
+        Where-Object { $_ -match "^\s*[^:\s]+\.dll\s*$" } |
+        ForEach-Object { $_.Trim() } |
+        Sort-Object -Unique
+}
+
+function Resolve-DependencyDll {
+    param(
+        [string]$Name,
+        [string[]]$SearchDirs
+    )
+
+    foreach ($dir in $SearchDirs) {
+        if (-not $dir -or -not (Test-Path $dir)) {
+            continue
+        }
+        $candidate = Join-Path $dir $Name
+        if (Test-Path $candidate) {
+            return (Get-Item $candidate)
+        }
+    }
+
+    return $null
+}
+
+function Copy-RuntimeDllArtifacts {
     param(
         [System.IO.FileInfo]$Executable,
-        [string]$DependencyBin,
-        [string]$Destination
+        [string[]]$SearchDirs,
+        [string]$Destination,
+        [string]$DependentsLog
     )
 
     if (-not $Executable) {
-        return
+        return @()
     }
 
-    $dllDestination = Join-Path $Destination "dlls"
-    New-Item -ItemType Directory -Force -Path $dllDestination | Out-Null
+    $copied = @{}
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    Get-DumpbinDependentNames -BinaryPath $Executable.FullName -LogPath $DependentsLog |
+        ForEach-Object { $queue.Enqueue($_) }
 
-    $exeDir = Split-Path $Executable.FullName -Parent
-    Get-ChildItem -Path $exeDir -File -Filter "*.dll" -ErrorAction SilentlyContinue |
-        Copy-Item -Destination $dllDestination -Force
+    while ($queue.Count -gt 0) {
+        $name = $queue.Dequeue()
+        if ($copied.ContainsKey($name.ToLowerInvariant())) {
+            continue
+        }
 
-    if (Test-Path $DependencyBin) {
-        Get-ChildItem -Path $DependencyBin -File -Filter "*.dll" -ErrorAction SilentlyContinue |
-            Copy-Item -Destination $dllDestination -Force
+        $dll = Resolve-DependencyDll -Name $name -SearchDirs $SearchDirs
+        if (-not $dll) {
+            Add-Content -Path $DependentsLog -Value "not packaged (system or missing): $name"
+            continue
+        }
+
+        Copy-Item -LiteralPath $dll.FullName -Destination $Destination -Force
+        $copied[$name.ToLowerInvariant()] = $dll.FullName
+
+        Get-DumpbinDependentNames -BinaryPath $dll.FullName -LogPath $DependentsLog |
+            ForEach-Object {
+                if (-not $copied.ContainsKey($_.ToLowerInvariant())) {
+                    $queue.Enqueue($_)
+                }
+            }
     }
+
+    return $copied.Values
+}
+
+function Copy-MsvcPackage {
+    param(
+        [string]$ConfigName,
+        [System.IO.FileInfo]$Executable,
+        [System.IO.FileInfo]$Pdb,
+        [string[]]$DependencyDirs,
+        [string]$ArtifactsRoot,
+        [string]$DependentsLog,
+        [string]$LayoutLog,
+        [bool]$IncludePdb
+    )
+
+    if (-not $Executable) {
+        return $null
+    }
+
+    $destination = Join-Path $ArtifactsRoot $ConfigName
+    if (Test-Path $destination) {
+        Remove-Item -Recurse -Force $destination
+    }
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+
+    Copy-Item -LiteralPath $Executable.FullName -Destination (Join-Path $destination "xemu.exe") -Force
+    if ($IncludePdb -and $Pdb) {
+        Copy-Item -LiteralPath $Pdb.FullName -Destination (Join-Path $destination "xemu.pdb") -Force
+    }
+
+    Copy-RuntimeDllArtifacts `
+        -Executable (Get-Item (Join-Path $destination "xemu.exe")) `
+        -SearchDirs (@($Executable.DirectoryName) + $DependencyDirs) `
+        -Destination $destination `
+        -DependentsLog $DependentsLog | Out-Null
+
+    Add-Content -Path $LayoutLog -Value "===== $ConfigName ====="
+    Get-ChildItem -Path $destination -Recurse -File |
+        Sort-Object FullName |
+        ForEach-Object { Add-Content -Path $LayoutLog -Value $_.FullName }
+
+    return $destination
+}
+
+function Invoke-RuntimeSmokeTest {
+    param(
+        [string]$ConfigName,
+        [string]$PackageDir,
+        [string]$LogsDir
+    )
+
+    $smokeLog = Join-Path $LogsDir "runtime-smoke.log"
+    $xemuLogDestination = Join-Path $LogsDir "xemu.log"
+    Add-Content -Path $smokeLog -Value "===== runtime smoke: $ConfigName ====="
+
+    if (-not $PackageDir) {
+        Add-Content -Path $smokeLog -Value "not_run: package directory missing"
+        return "not_run"
+    }
+
+    $exe = Join-Path $PackageDir "xemu.exe"
+    if (-not (Test-Path $exe)) {
+        Add-Content -Path $smokeLog -Value "failed: xemu.exe missing"
+        return "failed"
+    }
+
+    $localXemuLog = Join-Path $PackageDir "xemu.log"
+    Remove-Item -Force -ErrorAction SilentlyContinue $localXemuLog
+
+    try {
+        $proc = Start-Process -FilePath $exe -ArgumentList "--version" `
+            -WorkingDirectory $PackageDir `
+            -PassThru -WindowStyle Hidden
+        try {
+            Wait-Process -Id $proc.Id -Timeout 10 -ErrorAction Stop
+            Add-Content -Path $smokeLog -Value "exit_code=$($proc.ExitCode)"
+            if ($proc.ExitCode -ne 0) {
+                $result = "failed"
+            } else {
+                $result = "passed"
+            }
+        } catch {
+            if (-not $proc.HasExited) {
+                $proc.Kill()
+                Add-Content -Path $smokeLog -Value "timeout=10s killed=true"
+                $result = "timeout"
+            } else {
+                Add-Content -Path $smokeLog -Value "exit_code=$($proc.ExitCode)"
+                $result = if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }
+            }
+        }
+    } catch {
+        Add-Content -Path $smokeLog -Value "failed_to_start=$($_.Exception.Message)"
+        $result = "failed"
+    }
+
+    if (Test-Path $localXemuLog) {
+        Copy-Item -LiteralPath $localXemuLog -Destination $xemuLogDestination -Force
+        $logText = Get-Content -Raw $localXemuLog
+        if ($logText -match "la_bb_end: code should not be reached") {
+            Add-Content -Path $smokeLog -Value "la_bb_end=found"
+            $result = "la_bb_end"
+        } else {
+            Add-Content -Path $smokeLog -Value "la_bb_end=absent"
+        }
+    } else {
+        Add-Content -Path $smokeLog -Value "xemu_log=not_found"
+    }
+
+    return $result
 }
 
 $script:PhaseStart = @{}
@@ -168,29 +362,34 @@ Start-Phase "probe"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $logsDir = Join-Path $repoRoot "msvc-probe-logs"
-$artifactsDir = Join-Path $repoRoot "msvc-probe-artifacts"
+$artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 $finalExecutable = $null
 $finalPdb = $null
 $pdbReferenceCheck = "not_run"
 $cv2pdbCheck = "not_run"
+$runtimeSmokeCheck = "not_run"
+$packagedArtifact = "not_run"
 
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $artifactsRoot
+New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 $script:PhaseLog = Join-Path $logsDir "phase-timings.log"
 $script:PhaseEvents | Set-Content -Path $script:PhaseLog
 
 Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture
 
-Write-Host "MSVC probe environment"
+Write-Host "Windows MSVC native build environment"
 Write-Host "Repository: $repoRoot"
 Write-Host "Build dir:  $buildPath"
 Write-Host "Arch:       $Architecture"
 Write-Host "QEMU CPU:   $QemuCpu"
 Write-Host "Scope:      $BuildScope"
+Write-Host "Config:     $BuildConfig"
 Write-Host "vcpkg:      $VcpkgTriplet"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
@@ -283,6 +482,7 @@ $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
     "exit /b %ERRORLEVEL%"
 ) | Set-Content -Path $localCompiler -Encoding ASCII
 $localCompilerMeson = ConvertTo-WindowsSlashPath $localCompiler
+$mesonOptimization = if ($BuildConfig -eq "debug") { "0" } else { "2" }
 
 $configureArgs = @(
     "../configure",
@@ -297,7 +497,7 @@ $configureArgs = @(
     "--disable-werror",
     "--extra-cflags=-DXBOX=1",
     "--extra-cxxflags=-DXBOX=1",
-    "-Doptimization=0",
+    "-Doptimization=$mesonOptimization",
     "-Db_vscrt=md",
     "-Db_lto=false",
     "-Dslirp=disabled",
@@ -315,7 +515,7 @@ $configureLine = $configureArgs -join " "
 if ($ExtraConfigureArgs) {
     $configureLine += " $ExtraConfigureArgs"
 }
-$configureLine += " 2>&1 | tee ../msvc-probe-logs/configure-output.log"
+$configureLine += " > ../msvc-probe-logs/configure-output.log 2>&1"
 
 $configureCommand = @(
     "set -o pipefail",
@@ -326,7 +526,8 @@ $configureCommand = @(
     "export DLLTOOL=:",
     "export RANLIB=:",
     "export STRIP=:",
-    "export MSVC_CL_WRAPPER_TRACE=1",
+    "export MSVC_CL_WRAPPER_TRACE=link",
+    "export MSVC_CL_WRAPPER_BUILD_CONFIG=`"${BuildConfig}`"",
     "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
     "export PATH=`"${probePathBash}`"",
     "export PKG_CONFIG=`"${pkgConfigMeson}`"",
@@ -344,6 +545,11 @@ try {
     Start-Phase "meson setup"
     Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $configureCommand)
     $configureExit = $script:LastCommandExitCode
+    if ($configureExit -ne 0) {
+        Write-LogSummary -Path (Join-Path $logsDir "configure-output.log") -Tail 150
+    } else {
+        Write-Host "Configure exit code: $configureExit"
+    }
 } finally {
     End-Phase "meson setup"
     Pop-Location
@@ -408,7 +614,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
             $buildExit = $LASTEXITCODE
         } else {
             $targets = Get-Content -Raw $targetsLog | ConvertFrom-Json
-            if ($BuildScope -eq "fast") {
+            if ($BuildScope -in @("fast", "core")) {
                 $qemuUtilTarget = @($targets | Where-Object {
                     $_.name -eq "qemuutil" -or
                     $_.id -match "qemuutil" -or
@@ -459,11 +665,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     }
 
     if ($null -eq $buildExit -or $buildExit -eq 0) {
-        if ($BuildScope -eq "fast") {
-            $compileLine = "echo Fast MSVC probe target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
-        } else {
-            $compileLine = "echo Full MSVC probe target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose 2>&1 | tee ../msvc-probe-logs/build-output.log"
-        }
+        $compileLine = "echo Windows MSVC native ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ../msvc-probe-logs/build-output.log 2>&1"
 
         $buildCommand = @(
             "set -o pipefail",
@@ -474,7 +676,8 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
             "export DLLTOOL=:",
             "export RANLIB=:",
             "export STRIP=:",
-            "export MSVC_CL_WRAPPER_TRACE=1",
+            "export MSVC_CL_WRAPPER_TRACE=link",
+            "export MSVC_CL_WRAPPER_BUILD_CONFIG=`"${BuildConfig}`"",
             "export MSVC_CL_WRAPPER_LOG=`"${wrapperLogMeson}`"",
             "export PATH=`"${probePathBash}`"",
             "export PKG_CONFIG=`"${pkgConfigMeson}`"",
@@ -488,6 +691,8 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
             Start-Phase "meson compile $BuildScope"
             Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
             $buildExit = $script:LastCommandExitCode
+            Write-Host "Build exit code: $buildExit"
+            Write-LogSummary -Path (Join-Path $logsDir "build-output.log") -Tail 200
         } finally {
             End-Phase "meson compile $BuildScope"
             Pop-Location
@@ -498,6 +703,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
     Start-Phase "full validation"
     try {
+        $requiresPdb = $BuildConfig -ne "release"
         $finalExecutable = Find-FinalExecutable -Root $buildPath
         if (-not $finalExecutable) {
             Write-Warning "FAIL: xemu/qemu-system-i386 executable was not found."
@@ -508,38 +714,42 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
         } else {
             Write-Host "Binary found: $($finalExecutable.FullName)"
 
-            $matchingPdb = Join-Path $finalExecutable.DirectoryName "$($finalExecutable.BaseName).pdb"
-            if (Test-Path $matchingPdb) {
-                $finalPdb = Get-Item $matchingPdb
-            } else {
-                Write-Warning "Matching PDB was not found next to the binary: $matchingPdb"
-                Get-ChildItem -Path $buildPath -Recurse -File -Filter "*.pdb" -ErrorAction SilentlyContinue |
-                    Select-Object -ExpandProperty FullName |
-                    Set-Content -Path (Join-Path $logsDir "pdb-files.txt")
-
-                $fallbackPdb = Join-Path $buildPath "xemu.pdb"
-                if (Test-Path $fallbackPdb) {
-                    $finalPdb = Get-Item $fallbackPdb
+            if ($requiresPdb) {
+                $matchingPdb = Join-Path $finalExecutable.DirectoryName "$($finalExecutable.BaseName).pdb"
+                if (Test-Path $matchingPdb) {
+                    $finalPdb = Get-Item $matchingPdb
                 } else {
-                    Write-Warning "FAIL: final PDB was not found."
-                    $buildExit = 1
+                    Write-Warning "Matching PDB was not found next to the binary: $matchingPdb"
+                    Get-ChildItem -Path $buildPath -Recurse -File -Filter "*.pdb" -ErrorAction SilentlyContinue |
+                        Select-Object -ExpandProperty FullName |
+                        Set-Content -Path (Join-Path $logsDir "pdb-files.txt")
+
+                    $fallbackPdb = Join-Path $buildPath "xemu.pdb"
+                    if (Test-Path $fallbackPdb) {
+                        $finalPdb = Get-Item $fallbackPdb
+                    } else {
+                        Write-Warning "FAIL: final PDB was not found."
+                        $buildExit = 1
+                    }
                 }
-            }
 
-            if ($finalPdb) {
-                Write-Host "PDB found: $($finalPdb.FullName)"
-            }
+                if ($finalPdb) {
+                    Write-Host "PDB found: $($finalPdb.FullName)"
+                }
 
-            $dumpbinOutput = & dumpbin.exe /headers $finalExecutable.FullName 2>&1
-            $dumpbinOutput | Set-Content -Path (Join-Path $logsDir "dumpbin-headers.txt")
-            $dumpbinExit = $LASTEXITCODE
-            if ($dumpbinExit -ne 0 -or -not ($dumpbinOutput | Select-String -Pattern "RSDS|PDB" -CaseSensitive:$false)) {
-                Write-Warning "FAIL: no CodeView/RSDS/PDB reference was found in the binary."
-                $pdbReferenceCheck = "failed"
-                $buildExit = 1
+                $dumpbinOutput = & dumpbin.exe /headers $finalExecutable.FullName 2>&1
+                $dumpbinOutput | Set-Content -Path (Join-Path $logsDir "dumpbin-headers.txt")
+                $dumpbinExit = $LASTEXITCODE
+                if ($dumpbinExit -ne 0 -or -not ($dumpbinOutput | Select-String -Pattern "RSDS|PDB" -CaseSensitive:$false)) {
+                    Write-Warning "FAIL: no CodeView/RSDS/PDB reference was found in the binary."
+                    $pdbReferenceCheck = "failed"
+                    $buildExit = 1
+                } else {
+                    Write-Host "OK: CodeView/RSDS/PDB reference found in binary."
+                    $pdbReferenceCheck = "passed"
+                }
             } else {
-                Write-Host "OK: CodeView/RSDS/PDB reference found in binary."
-                $pdbReferenceCheck = "passed"
+                $pdbReferenceCheck = "not_required_release"
             }
         }
 
@@ -567,40 +777,89 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
     }
 }
 
-Start-Phase "artifact collection"
+Start-Phase "artifact packaging"
 if (Test-Path (Join-Path $buildPath "config.log")) {
     Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
 }
 if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
     Copy-Item (Join-Path $buildPath "meson-logs\meson-log.txt") (Join-Path $logsDir "meson-log.txt") -Force
 }
-if ($BuildScope -eq "full") {
-    Copy-ProbeArtifact -File $finalExecutable -Destination $artifactsDir
-    Copy-ProbeArtifact -File $finalPdb -Destination $artifactsDir
-    Copy-DllArtifacts -Executable $finalExecutable -DependencyBin $vcpkgBin -Destination $artifactsDir
+$dependentsLog = Join-Path $logsDir "dependents.log"
+$layoutLog = Join-Path $logsDir "artifact-layout.log"
+$runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
+if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
+if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
+if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
+
+if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
+    "" | Set-Content -Path $dependentsLog
+    "" | Set-Content -Path $layoutLog
+    $artifactConfigName = switch ($BuildConfig) {
+        "release" { "release" }
+        "debug" { "debug" }
+        default { "profile" }
+    }
+    $includePdb = $BuildConfig -ne "release"
+    $packagedArtifact = Copy-MsvcPackage `
+        -ConfigName $artifactConfigName `
+        -Executable $finalExecutable `
+        -Pdb $finalPdb `
+        -DependencyDirs @($vcpkgBin) `
+        -ArtifactsRoot $artifactsRoot `
+        -DependentsLog $dependentsLog `
+        -LayoutLog $layoutLog `
+        -IncludePdb:$includePdb
+}
+End-Phase "artifact packaging"
+
+if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $packagedArtifact -ne "not_run") {
+    Start-Phase "runtime smoke test"
+    try {
+        $runtimeSmokeCheck = Invoke-RuntimeSmokeTest `
+            -ConfigName $BuildConfig `
+            -PackageDir $packagedArtifact `
+            -LogsDir $logsDir
+        if ($runtimeSmokeCheck -in @("failed", "la_bb_end")) {
+            Write-Warning "FAIL: runtime smoke test result: $runtimeSmokeCheck"
+            $buildExit = 1
+        } elseif ($runtimeSmokeCheck -eq "timeout") {
+            Write-Warning "WARN: runtime smoke test timed out; GUI subsystem may keep running."
+        } else {
+            Write-Host "Runtime smoke test result: $runtimeSmokeCheck"
+        }
+    } finally {
+        End-Phase "runtime smoke test"
+    }
 }
 
 @(
     "configure_exit_code=$configureExit",
     "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
     "build_scope=$BuildScope",
+    "build_config=$BuildConfig",
     "strict=$Strict",
     "xemu_exe=$(if ($finalExecutable) { $finalExecutable.FullName } else { 'not_found' })",
     "xemu_pdb=$(if ($finalPdb) { $finalPdb.FullName } else { 'not_found' })",
     "pdb_reference_check=$pdbReferenceCheck",
-    "cv2pdb_check=$cv2pdbCheck"
+    "cv2pdb_check=$cv2pdbCheck",
+    "runtime_smoke_check=$runtimeSmokeCheck",
+    "packaged_artifact=$packagedArtifact"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
-End-Phase "artifact collection"
+
+Write-Host "Status summary:"
+Get-Content -Path (Join-Path $logsDir "status.txt")
+Write-Host "Phase timings:"
+Get-Content -Path $script:PhaseLog
 
 if ($configureExit -ne 0) {
-    Write-Warning "MSVC configure probe failed with exit code $configureExit. Logs were written to $logsDir."
+    Write-Warning "Windows MSVC native configure failed with exit code $configureExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
         exit $configureExit
     }
 }
 if ($null -ne $buildExit -and $buildExit -ne 0) {
-    Write-Warning "MSVC build probe failed with exit code $buildExit. Logs were written to $logsDir."
+    Write-Warning "Windows MSVC native build failed with exit code $buildExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
         exit $buildExit

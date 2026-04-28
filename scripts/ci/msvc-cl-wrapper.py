@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Minimal cl.exe adapter for the MSVC CI probe.
+# Minimal cl.exe adapter for the Windows MSVC native CI build.
 #
 # QEMU's configure script invokes the selected compiler with GCC-like command
 # line syntax.  This shim translates only the common probe/build flags needed
@@ -19,11 +19,17 @@ if os.name == "nt":
 
 
 SAFE_IGNORED_FLAGS = {
+    "-fdiagnostics-color=auto",
+    "-fms-runtime-lib=dll",
     "-fno-common",
     "-fno-pie",
     "-fno-strict-aliasing",
+    "-fvisibility=hidden",
+    "-fzero-call-used-regs=used-gpr",
+    "-mcx16",
     "-fwrapv",
     "-m64",
+    "-msse2",
     "-no-pie",
     "-pipe",
     "-pthread",
@@ -48,24 +54,40 @@ IGNORED_LINKER_FLAGS = {
     "relro",
 }
 
-COMPILER_DEFAULTS = ["/Zi", "/FS", "/MD", "/Oy-"]
+BUILD_CONFIG = os.environ.get("MSVC_CL_WRAPPER_BUILD_CONFIG", "profile").lower()
 LINKER_MACHINE = os.environ.get("MSVC_CL_WRAPPER_MACHINE", "X64").upper()
 COMPILER_RT_MACHINE = {
     "X64": "x86_64",
     "X86": "i386",
     "ARM64": "aarch64",
 }.get(LINKER_MACHINE, LINKER_MACHINE.lower())
-LINKER_DEFAULTS = [
-    "/DEBUG:FULL",
-    "/PDB:xemu.pdb",
-    "/INCREMENTAL:NO",
-    "/OPT:REF",
-    "/OPT:NOICF",
-    f"/MACHINE:{LINKER_MACHINE}",
-    "/ENTRY:mainCRTStartup",
-    "iphlpapi.lib",
-]
 CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
+
+
+def compiler_defaults():
+    if BUILD_CONFIG == "release":
+        return ["/MD", "/O2"]
+    if BUILD_CONFIG == "debug":
+        return ["/Zi", "/FS", "/MD", "/Oy-", "/Od"]
+    return ["/Zi", "/FS", "/MD", "/Oy-", "/O2"]
+
+
+def linker_defaults():
+    defaults = [
+        "/INCREMENTAL:NO",
+        f"/MACHINE:{LINKER_MACHINE}",
+        "/ENTRY:mainCRTStartup",
+        "iphlpapi.lib",
+    ]
+    if BUILD_CONFIG == "release":
+        return ["/OPT:REF", "/OPT:ICF", *defaults]
+    if BUILD_CONFIG == "debug":
+        return ["/DEBUG:FULL", "/PDB:xemu.pdb", "/OPT:NOREF", "/OPT:NOICF", *defaults]
+    return ["/DEBUG:FULL", "/PDB:xemu.pdb", "/OPT:REF", "/OPT:NOICF", *defaults]
+
+
+def optimization_flag():
+    return "/Od" if BUILD_CONFIG == "debug" else "/O2"
 
 
 def split_response_text(text):
@@ -228,7 +250,7 @@ def translate_args(args, compiler_name=""):
         "unknown": [],
     }
 
-    for flag in COMPILER_DEFAULTS:
+    for flag in compiler_defaults():
         append_translated_once(out, report, "<default>", flag)
 
     i = 0
@@ -301,6 +323,11 @@ def translate_args(args, compiler_name=""):
             append_translated(out, report, f"{arg} {args[i]}", "/I" + args[i])
         elif arg.startswith("-isystem") and len(arg) > len("-isystem"):
             append_translated(out, report, arg, "/I" + arg[len("-isystem"):])
+        elif arg == "-ftrivial-auto-var-init=zero":
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:-ftrivial-auto-var-init=zero")
+            else:
+                ignore_flag(report, arg)
         elif arg in SAFE_IGNORED_FLAGS:
             ignore_flag(report, arg)
         elif arg in DANGEROUS_FLAGS:
@@ -310,9 +337,9 @@ def translate_args(args, compiler_name=""):
         elif lower_arg == "/z7":
             append_translated_once(out, report, arg, "/Zi")
         elif arg == "-O0":
-            append_translated(out, report, arg, "/Od")
+            append_translated(out, report, arg, optimization_flag())
         elif arg in {"-O1", "-O2", "-O3", "-Os"}:
-            append_translated(out, report, arg, "/O2")
+            append_translated(out, report, arg, optimization_flag())
         elif arg.startswith("-std="):
             before = list(out)
             append_std_flag(out, arg.split("=", 1)[1], compiler_name)
@@ -370,11 +397,11 @@ def translate_args(args, compiler_name=""):
 
     if not compile_only and not preprocess_only and not assemble_only:
         out.append("/link")
-        linker_defaults = list(LINKER_DEFAULTS)
+        link_defaults = list(linker_defaults())
         if compiler_name.startswith("clang-cl"):
-            linker_defaults.append(f"clang_rt.builtins-{COMPILER_RT_MACHINE}.lib")
-        out.extend(linker_defaults)
-        for flag in linker_defaults:
+            link_defaults.append(f"clang_rt.builtins-{COMPILER_RT_MACHINE}.lib")
+        out.extend(link_defaults)
+        for flag in link_defaults:
             report["translated"].append(("<link-default>", flag))
         out.extend(link)
 
@@ -382,6 +409,7 @@ def translate_args(args, compiler_name=""):
         "depfile": depfile,
         "target": dep_target or output,
         "sources": source_inputs,
+        "is_link": not compile_only and not preprocess_only and not assemble_only,
     }
     return out, report, depinfo
 
@@ -406,10 +434,12 @@ def write_depfile(depinfo):
         dep.write("\n")
 
 
-def emit_report(compiler, translated, report):
-    trace = os.environ.get("MSVC_CL_WRAPPER_TRACE")
+def emit_report(compiler, translated, report, is_link=False):
+    trace = os.environ.get("MSVC_CL_WRAPPER_TRACE", "").lower()
     has_unknown = bool(report["unknown"])
-    if not trace and not has_unknown:
+    trace_all = trace in {"1", "true", "all", "verbose"}
+    trace_link = trace in {"link", "links"}
+    if not trace_all and not (trace_link and is_link) and not has_unknown:
         return
 
     lines = [
@@ -470,7 +500,7 @@ def main():
         command_args = ["@" + rsp_path]
         display_args = command_args
 
-    emit_report(compiler, display_args, report)
+    emit_report(compiler, display_args, report, is_link=depinfo.get("is_link", False))
 
     result = subprocess.run([compiler, *command_args])
     if rsp_path:
