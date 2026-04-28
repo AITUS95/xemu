@@ -14,6 +14,7 @@ on:
       - "include/**"
       - "host/**"
       - "hw/**"
+      - "tcg/**"
       - "ui/**"
       - "util/**"
       - "meson.build"

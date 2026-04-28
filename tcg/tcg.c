@@ -3914,6 +3914,48 @@ static void la_func_end(TCGContext *s, int ng, int nt)
     }
 }
 
+static const char *tcg_temp_kind_name(TCGTempKind kind)
+{
+    switch (kind) {
+    case TEMP_EBB:
+        return "TEMP_EBB";
+    case TEMP_TB:
+        return "TEMP_TB";
+    case TEMP_GLOBAL:
+        return "TEMP_GLOBAL";
+    case TEMP_FIXED:
+        return "TEMP_FIXED";
+    case TEMP_CONST:
+        return "TEMP_CONST";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *tcg_type_name(TCGType type)
+{
+    switch (type) {
+    case TCG_TYPE_I32:
+        return "TCG_TYPE_I32";
+    case TCG_TYPE_I64:
+        return "TCG_TYPE_I64";
+    case TCG_TYPE_I128:
+        return "TCG_TYPE_I128";
+    case TCG_TYPE_F32:
+        return "TCG_TYPE_F32";
+    case TCG_TYPE_F64:
+        return "TCG_TYPE_F64";
+    case TCG_TYPE_V64:
+        return "TCG_TYPE_V64";
+    case TCG_TYPE_V128:
+        return "TCG_TYPE_V128";
+    case TCG_TYPE_V256:
+        return "TCG_TYPE_V256";
+    default:
+        return "unknown";
+    }
+}
+
 /* liveness analysis: end of basic block: all temps are dead, globals
    and local temps should be in memory. */
 static void la_bb_end(TCGContext *s, int ng, int nt)
@@ -3935,6 +3977,16 @@ static void la_bb_end(TCGContext *s, int ng, int nt)
             state = TS_DEAD;
             break;
         default:
+            error_report("TCG la_bb_end invalid temp: index=%d nt=%d ng=%d "
+                         "nb_temps=%d nb_globals=%d kind=%d(%s) "
+                         "type=%d(%s) base_type=%d(%s) val_type=%d "
+                         "state=0x%" PRIxPTR " reg=%d name=%s",
+                         i, nt, ng, s->nb_temps, s->nb_globals,
+                         ts->kind, tcg_temp_kind_name(ts->kind),
+                         ts->type, tcg_type_name(ts->type),
+                         ts->base_type, tcg_type_name(ts->base_type),
+                         ts->val_type, ts->state, ts->reg,
+                         ts->name ? ts->name : "(null)");
             g_assert_not_reached();
         }
         ts->state = state;

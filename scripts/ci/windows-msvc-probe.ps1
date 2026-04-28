@@ -300,11 +300,86 @@ function Copy-MsvcPackage {
     return $destination
 }
 
-function Invoke-RuntimeSmokeTest {
+function Find-XemuLogFiles {
+    param(
+        [string]$PackageDir,
+        [string]$LogsDir,
+        [datetime]$Since,
+        [string]$WorkspaceRoot
+    )
+
+    $searchLog = Join-Path $LogsDir "xemu-log-search.log"
+    $resolvedLogsDir = if (Test-Path $LogsDir) { (Resolve-Path $LogsDir).Path } else { $LogsDir }
+    $roots = @(
+        $PackageDir,
+        (Get-Location).Path,
+        $WorkspaceRoot,
+        $env:GITHUB_WORKSPACE,
+        $env:LOCALAPPDATA,
+        $env:APPDATA,
+        $env:TEMP
+    ) | Where-Object { $_ -and (Test-Path $_) } |
+        ForEach-Object { (Resolve-Path $_).Path } |
+        Sort-Object -Unique
+
+    "search_since=$($Since.ToString("o"))" | Set-Content -Path $searchLog
+    $roots | ForEach-Object { Add-Content -Path $searchLog -Value "search_root=$_" }
+
+    $candidates = @()
+    foreach ($root in $roots) {
+        try {
+            $candidates += Get-ChildItem -Path $root -Recurse -Force -File -Filter "xemu.log" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.LastWriteTime -ge $Since.AddSeconds(-5) -and
+                    -not $_.FullName.StartsWith($resolvedLogsDir, [System.StringComparison]::OrdinalIgnoreCase)
+                }
+        } catch {
+            Add-Content -Path $searchLog -Value "search_error=$root :: $($_.Exception.Message)"
+        }
+    }
+
+    $candidates = @($candidates | Sort-Object LastWriteTime -Descending -Unique)
+    if ($candidates) {
+        $candidates | ForEach-Object {
+            Add-Content -Path $searchLog -Value "candidate=$($_.FullName); last_write=$($_.LastWriteTime.ToString("o")); bytes=$($_.Length)"
+        }
+    } else {
+        Add-Content -Path $searchLog -Value "candidate=none"
+    }
+
+    return $candidates
+}
+
+function Test-XemuRuntimeLog {
+    param(
+        [string]$Path,
+        [string]$SmokeLog
+    )
+
+    $text = Get-Content -Raw -Path $Path
+    $patterns = @(
+        "la_bb_end",
+        "Bail out",
+        "code should not be reached",
+        "ERROR:\.\./tcg/tcg\.c"
+    )
+    foreach ($pattern in $patterns) {
+        if ($text -match $pattern) {
+            Add-Content -Path $SmokeLog -Value "runtime_log_failure=$pattern"
+            return "found"
+        }
+    }
+
+    Add-Content -Path $SmokeLog -Value "runtime_log_failure=absent"
+    return "absent"
+}
+
+function Invoke-RuntimeVersionSmokeTest {
     param(
         [string]$ConfigName,
         [string]$PackageDir,
-        [string]$LogsDir
+        [string]$LogsDir,
+        [string]$WorkspaceRoot
     )
 
     $smokeLog = Join-Path $LogsDir "runtime-smoke.log"
@@ -313,18 +388,28 @@ function Invoke-RuntimeSmokeTest {
 
     if (-not $PackageDir) {
         Add-Content -Path $smokeLog -Value "not_run: package directory missing"
-        return "not_run"
+        return [pscustomobject]@{
+            VersionSmoke = "not_run"
+            XemuLogStatus = "not_found"
+            LaBbEndStatus = "unverified"
+        }
     }
 
     $exe = Join-Path $PackageDir "xemu.exe"
     if (-not (Test-Path $exe)) {
         Add-Content -Path $smokeLog -Value "failed: xemu.exe missing"
-        return "failed"
+        return [pscustomobject]@{
+            VersionSmoke = "failed"
+            XemuLogStatus = "not_found"
+            LaBbEndStatus = "unverified"
+        }
     }
 
     $localXemuLog = Join-Path $PackageDir "xemu.log"
     Remove-Item -Force -ErrorAction SilentlyContinue $localXemuLog
+    Remove-Item -Force -ErrorAction SilentlyContinue $xemuLogDestination
 
+    $startedAt = Get-Date
     try {
         $proc = Start-Process -FilePath $exe -ArgumentList "--version" `
             -WorkingDirectory $PackageDir `
@@ -340,8 +425,9 @@ function Invoke-RuntimeSmokeTest {
         } catch {
             if (-not $proc.HasExited) {
                 $proc.Kill()
+                Add-Content -Path $smokeLog -Value "runtime_version_smoke=timeout_no_crash_observed"
                 Add-Content -Path $smokeLog -Value "timeout=10s killed=true"
-                $result = "timeout"
+                $result = "timeout_no_crash_observed"
             } else {
                 Add-Content -Path $smokeLog -Value "exit_code=$($proc.ExitCode)"
                 $result = if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }
@@ -352,21 +438,120 @@ function Invoke-RuntimeSmokeTest {
         $result = "failed"
     }
 
-    if (Test-Path $localXemuLog) {
-        Copy-Item -LiteralPath $localXemuLog -Destination $xemuLogDestination -Force
-        $logText = Get-Content -Raw $localXemuLog
-        if ($logText -match "la_bb_end: code should not be reached") {
-            Add-Content -Path $smokeLog -Value "la_bb_end=found"
+    $xemuLogs = Find-XemuLogFiles `
+        -PackageDir $PackageDir `
+        -LogsDir $LogsDir `
+        -Since $startedAt `
+        -WorkspaceRoot $WorkspaceRoot
+
+    if ($xemuLogs) {
+        $selected = $xemuLogs | Select-Object -First 1
+        Copy-Item -LiteralPath $selected.FullName -Destination $xemuLogDestination -Force
+        Add-Content -Path $smokeLog -Value "xemu_log=found:$($selected.FullName)"
+        $xemuLogStatus = "found"
+        $laBbEndStatus = Test-XemuRuntimeLog -Path $selected.FullName -SmokeLog $smokeLog
+        if ($laBbEndStatus -eq "found") {
             $result = "la_bb_end"
-        } else {
-            Add-Content -Path $smokeLog -Value "la_bb_end=absent"
         }
     } else {
         "not_found" | Set-Content -Path $xemuLogDestination
         Add-Content -Path $smokeLog -Value "xemu_log=not_found"
+        $xemuLogStatus = "not_found"
+        $laBbEndStatus = "unverified"
     }
 
-    return $result
+    return [pscustomobject]@{
+        VersionSmoke = $result
+        XemuLogStatus = $xemuLogStatus
+        LaBbEndStatus = $laBbEndStatus
+    }
+}
+
+function Invoke-RuntimeRealSmokeTest {
+    param(
+        [string]$ConfigName,
+        [string]$PackageDir,
+        [string]$LogsDir,
+        [string]$WorkspaceRoot
+    )
+
+    $realLog = Join-Path $LogsDir "runtime-real-smoke.log"
+    Add-Content -Path $realLog -Value "===== runtime real smoke: $ConfigName ====="
+
+    if (-not $env:MSVC_RUNTIME_REAL_ARGS) {
+        Add-Content -Path $realLog -Value "runtime_real_validation=manual_required"
+        Add-Content -Path $realLog -Value "reason=MSVC_RUNTIME_REAL_ARGS not set; CI has no BIOS/ROM/test payload to exercise TCG"
+        Add-Content -Path $realLog -Value "la_bb_end_status=unresolved"
+        return [pscustomobject]@{
+            RuntimeRealValidation = "manual_required"
+            LaBbEndStatus = "unresolved"
+            XemuLogStatus = "not_run"
+        }
+    }
+
+    $exe = Join-Path $PackageDir "xemu.exe"
+    if (-not (Test-Path $exe)) {
+        Add-Content -Path $realLog -Value "runtime_real_validation=failed"
+        Add-Content -Path $realLog -Value "reason=xemu.exe missing"
+        return [pscustomobject]@{
+            RuntimeRealValidation = "failed"
+            LaBbEndStatus = "unverified"
+            XemuLogStatus = "not_found"
+        }
+    }
+
+    $startedAt = Get-Date
+    try {
+        $proc = Start-Process -FilePath $exe -ArgumentList $env:MSVC_RUNTIME_REAL_ARGS `
+            -WorkingDirectory $PackageDir `
+            -PassThru -WindowStyle Hidden
+        try {
+            Wait-Process -Id $proc.Id -Timeout 20 -ErrorAction Stop
+            Add-Content -Path $realLog -Value "exit_code=$($proc.ExitCode)"
+            $realResult = if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }
+        } catch {
+            if (-not $proc.HasExited) {
+                $proc.Kill()
+                Add-Content -Path $realLog -Value "timeout=20s killed=true"
+                $realResult = "timeout_no_crash_observed"
+            } else {
+                Add-Content -Path $realLog -Value "exit_code=$($proc.ExitCode)"
+                $realResult = if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }
+            }
+        }
+    } catch {
+        Add-Content -Path $realLog -Value "failed_to_start=$($_.Exception.Message)"
+        $realResult = "failed"
+    }
+
+    $xemuLogs = Find-XemuLogFiles `
+        -PackageDir $PackageDir `
+        -LogsDir $LogsDir `
+        -Since $startedAt `
+        -WorkspaceRoot $WorkspaceRoot
+
+    if ($xemuLogs) {
+        $selected = $xemuLogs | Select-Object -First 1
+        Copy-Item -LiteralPath $selected.FullName -Destination (Join-Path $LogsDir "xemu-real.log") -Force
+        Add-Content -Path $realLog -Value "xemu_log=found:$($selected.FullName)"
+        $xemuLogStatus = "found"
+        $laBbEndStatus = Test-XemuRuntimeLog -Path $selected.FullName -SmokeLog $realLog
+        if ($laBbEndStatus -eq "found") {
+            $realResult = "la_bb_end"
+        }
+    } else {
+        Add-Content -Path $realLog -Value "xemu_log=not_found"
+        $xemuLogStatus = "not_found"
+        $laBbEndStatus = "unverified"
+    }
+
+    Add-Content -Path $realLog -Value "runtime_real_validation=$realResult"
+    Add-Content -Path $realLog -Value "la_bb_end_status=$laBbEndStatus"
+    return [pscustomobject]@{
+        RuntimeRealValidation = $realResult
+        LaBbEndStatus = $laBbEndStatus
+        XemuLogStatus = $xemuLogStatus
+    }
 }
 
 function Get-PowerShellHostPath {
@@ -438,6 +623,7 @@ function Invoke-AllBuildConfigs {
         "strict=$Strict"
     )
     $buildExitAggregate = 0
+    $validationExitAggregate = 0
     $configureExitAggregate = 0
 
     foreach ($config in $configs) {
@@ -508,13 +694,22 @@ function Invoke-AllBuildConfigs {
         $statusLines += "$config.pdb_reference_check=$(Get-StatusValue -StatusPath $statusPath -Key "pdb_reference_check")"
         $statusLines += "$config.cv2pdb_check=$(Get-StatusValue -StatusPath $statusPath -Key "cv2pdb_check")"
         $statusLines += "$config.runtime_smoke_check=$(Get-StatusValue -StatusPath $statusPath -Key "runtime_smoke_check")"
+        $statusLines += "$config.runtime_version_smoke=$(Get-StatusValue -StatusPath $statusPath -Key "runtime_version_smoke")"
+        $statusLines += "$config.runtime_real_validation=$(Get-StatusValue -StatusPath $statusPath -Key "runtime_real_validation")"
+        $statusLines += "$config.xemu_log_status=$(Get-StatusValue -StatusPath $statusPath -Key "xemu_log_status")"
+        $statusLines += "$config.la_bb_end_status=$(Get-StatusValue -StatusPath $statusPath -Key "la_bb_end_status")"
+        $statusLines += "$config.d8003_check=$(Get-StatusValue -StatusPath $statusPath -Key "d8003_check")"
+        $statusLines += "$config.validation_exit_code=$(Get-StatusValue -StatusPath $statusPath -Key "validation_exit_code")"
         $statusLines += "$config.packaged_artifact=$(Get-StatusValue -StatusPath $statusPath -Key "packaged_artifact")"
 
         if ($configConfigureExit -ne "0") {
             $configureExitAggregate = 1
         }
-        if ($childExit -ne 0 -or $configBuildExit -ne "0") {
-            $buildExitAggregate = if ($childExit -ne 0) { $childExit } else { 1 }
+        if ($configBuildExit -ne "0") {
+            $buildExitAggregate = 1
+        }
+        if ($childExit -ne 0) {
+            $validationExitAggregate = $childExit
         }
 
         $configElapsed = (Get-Date) - $configStartedAt
@@ -525,9 +720,14 @@ function Invoke-AllBuildConfigs {
         "artifact-layout.log" = "artifact-layout.log"
         "dependents.log" = "dependents.log"
         "runtime-smoke.log" = "runtime-smoke.log"
+        "runtime-real-smoke.log" = "runtime-real-smoke.log"
         "dumpbin-headers.txt" = "dumpbin-headers.txt"
         "pdb-check.log" = "pdb-check.log"
         "xemu.log" = "xemu.log"
+        "xemu-real.log" = "xemu-real.log"
+        "xemu-log-search.log" = "xemu-log-search.log"
+        "d8003-matches.txt" = "d8003-matches.txt"
+        "strict-validation-failures.txt" = "strict-validation-failures.txt"
     }
     foreach ($entry in $aggregateLogs.GetEnumerator()) {
         $aggregatePath = Join-Path $logsDir $entry.Key
@@ -550,7 +750,8 @@ function Invoke-AllBuildConfigs {
         "where-link.log",
         "xemu-version-diagnostics.log",
         "meson-targets.json",
-        "config.log"
+        "config.log",
+        "strict-validation-failures.txt"
     )) {
         $indexPath = Join-Path $logsDir $logName
         "build_config=all" | Set-Content -Path $indexPath
@@ -569,7 +770,8 @@ function Invoke-AllBuildConfigs {
 
     @(
         "configure_exit_code=$configureExitAggregate",
-        "build_exit_code=$buildExitAggregate"
+        "build_exit_code=$buildExitAggregate",
+        "validation_exit_code=$validationExitAggregate"
     ) + $statusLines + @(
         "xemu_exe=see_config_logs",
         "xemu_pdb=see_config_logs",
@@ -586,9 +788,12 @@ function Invoke-AllBuildConfigs {
 
     Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
 
-    if ($Strict -and ($configureExitAggregate -ne 0 -or $buildExitAggregate -ne 0)) {
+    if ($Strict -and ($configureExitAggregate -ne 0 -or $buildExitAggregate -ne 0 -or $validationExitAggregate -ne 0)) {
         if ($buildExitAggregate -ne 0) {
             exit $buildExitAggregate
+        }
+        if ($validationExitAggregate -ne 0) {
+            exit $validationExitAggregate
         }
         exit $configureExitAggregate
     }
@@ -612,6 +817,7 @@ $script:PhaseLog = $null
 Start-Phase "probe"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$script:RepoRoot = $repoRoot
 $logsDirName = if ($env:MSVC_PROBE_LOGS_DIR_NAME) { $env:MSVC_PROBE_LOGS_DIR_NAME } else { "msvc-probe-logs" }
 $logsDir = Join-Path $repoRoot $logsDirName
 $logsDirBash = "../$logsDirName"
@@ -624,6 +830,13 @@ $finalPdb = $null
 $pdbReferenceCheck = "not_run"
 $cv2pdbCheck = "not_run"
 $runtimeSmokeCheck = "not_run"
+$runtimeVersionSmokeCheck = "not_run"
+$runtimeRealValidation = "not_run"
+$xemuLogStatus = "not_run"
+$laBbEndStatus = "not_run"
+$d8003Check = "not_run"
+$validationExit = 0
+$validationFailures = @()
 $packagedArtifact = "not_run"
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsDir
@@ -716,7 +929,16 @@ $wrapperLogMeson = $wrapperLog.Replace("\", "/")
 $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
 Start-Phase "python and meson tool setup"
-cl /Bv 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "cl-version.log")
+$clVersionLog = Join-Path $logsDir "cl-version.log"
+if ($compilerCommand -eq "clang-cl.exe") {
+    clang-cl.exe --version 2>&1 | Tee-Object -FilePath $clVersionLog
+} else {
+    @(
+        "compiler=$compilerCommand",
+        "cl_version_probe=skipped",
+        "reason=cl /Bv without a source emits D8003"
+    ) | Set-Content -Path $clVersionLog
+}
 python --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "python-version.log")
 python -m pip install --upgrade pip meson ninja
 $pythonScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
@@ -1058,13 +1280,19 @@ if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
 $dependentsLog = Join-Path $logsDir "dependents.log"
 $layoutLog = Join-Path $logsDir "artifact-layout.log"
 $runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
+$runtimeRealSmokeLog = Join-Path $logsDir "runtime-real-smoke.log"
 $pdbCheckLog = Join-Path $logsDir "pdb-check.log"
 $xemuLog = Join-Path $logsDir "xemu.log"
+$xemuLogSearchLog = Join-Path $logsDir "xemu-log-search.log"
+$d8003MatchesLog = Join-Path $logsDir "d8003-matches.txt"
 if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
 if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
 if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
+if (-not (Test-Path $runtimeRealSmokeLog)) { "not_run" | Set-Content -Path $runtimeRealSmokeLog }
 if (-not (Test-Path $pdbCheckLog)) { "not_run" | Set-Content -Path $pdbCheckLog }
 if (-not (Test-Path $xemuLog)) { "not_run" | Set-Content -Path $xemuLog }
+if (-not (Test-Path $xemuLogSearchLog)) { "not_run" | Set-Content -Path $xemuLogSearchLog }
+if (-not (Test-Path $d8003MatchesLog)) { "not_run" | Set-Content -Path $d8003MatchesLog }
 
 if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
     "" | Set-Content -Path $dependentsLog
@@ -1088,28 +1316,92 @@ if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
 End-Phase "artifact packaging"
 
 if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $packagedArtifact -ne "not_run") {
-    Start-Phase "runtime smoke test"
+    Start-Phase "runtime version smoke test"
     try {
-        $runtimeSmokeCheck = Invoke-RuntimeSmokeTest `
+        $versionSmoke = Invoke-RuntimeVersionSmokeTest `
             -ConfigName $BuildConfig `
             -PackageDir $packagedArtifact `
-            -LogsDir $logsDir
+            -LogsDir $logsDir `
+            -WorkspaceRoot $repoRoot
+        $runtimeVersionSmokeCheck = $versionSmoke.VersionSmoke
+        $runtimeSmokeCheck = $runtimeVersionSmokeCheck
+        $xemuLogStatus = $versionSmoke.XemuLogStatus
+        $laBbEndStatus = $versionSmoke.LaBbEndStatus
         if ($runtimeSmokeCheck -in @("failed", "la_bb_end")) {
-            Write-Warning "FAIL: runtime smoke test result: $runtimeSmokeCheck"
+            Write-Warning "FAIL: runtime version smoke test result: $runtimeSmokeCheck"
             $buildExit = 1
-        } elseif ($runtimeSmokeCheck -eq "timeout") {
-            Write-Warning "WARN: runtime smoke test timed out; GUI subsystem may keep running."
+        } elseif ($runtimeSmokeCheck -eq "timeout_no_crash_observed") {
+            Write-Warning "WARN: runtime version smoke timed out; this is not runtime validation."
         } else {
-            Write-Host "Runtime smoke test result: $runtimeSmokeCheck"
+            Write-Host "Runtime version smoke test result: $runtimeSmokeCheck"
         }
     } finally {
-        End-Phase "runtime smoke test"
+        End-Phase "runtime version smoke test"
     }
+
+    Start-Phase "runtime real smoke test"
+    try {
+        $realSmoke = Invoke-RuntimeRealSmokeTest `
+            -ConfigName $BuildConfig `
+            -PackageDir $packagedArtifact `
+            -LogsDir $logsDir `
+            -WorkspaceRoot $repoRoot
+        $runtimeRealValidation = $realSmoke.RuntimeRealValidation
+        if ($realSmoke.XemuLogStatus -eq "found") {
+            $xemuLogStatus = "found"
+        }
+        if ($realSmoke.LaBbEndStatus -in @("found", "unresolved")) {
+            $laBbEndStatus = $realSmoke.LaBbEndStatus
+        }
+        if ($runtimeRealValidation -in @("failed", "la_bb_end")) {
+            Write-Warning "FAIL: runtime real smoke test result: $runtimeRealValidation"
+            $buildExit = 1
+        } elseif ($runtimeRealValidation -eq "manual_required") {
+            Write-Warning "WARN: runtime real smoke test requires external BIOS/ROM/test payload."
+        } else {
+            Write-Host "Runtime real smoke test result: $runtimeRealValidation"
+        }
+    } finally {
+        End-Phase "runtime real smoke test"
+    }
+}
+
+$d8003Matches = Get-ChildItem -Path $logsDir -Recurse -Force -File -ErrorAction SilentlyContinue |
+    Select-String -Pattern "D8003" -CaseSensitive:$false
+if ($d8003Matches) {
+    $d8003Check = "found"
+    $d8003Matches |
+        ForEach-Object { "$($_.Path):$($_.LineNumber): $($_.Line)" } |
+        Set-Content -Path (Join-Path $logsDir "d8003-matches.txt")
+    $validationFailures += "D8003 present in logs"
+} else {
+    $d8003Check = "absent"
+    "D8003=absent" | Set-Content -Path (Join-Path $logsDir "d8003-matches.txt")
+}
+
+if ($BuildScope -eq "full") {
+    if ($xemuLogStatus -ne "found") {
+        $validationFailures += "xemu.log was not collected"
+    }
+    if ($runtimeRealValidation -ne "passed") {
+        $validationFailures += "runtime real validation is $runtimeRealValidation"
+    }
+    if ($laBbEndStatus -in @("found", "unresolved", "unverified")) {
+        $validationFailures += "la_bb_end status is $laBbEndStatus"
+    }
+}
+
+if ($validationFailures) {
+    $validationExit = 1
+    $validationFailures | Set-Content -Path (Join-Path $logsDir "strict-validation-failures.txt")
+} else {
+    "none" | Set-Content -Path (Join-Path $logsDir "strict-validation-failures.txt")
 }
 
 @(
     "configure_exit_code=$configureExit",
     "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
+    "validation_exit_code=$validationExit",
     "build_scope=$BuildScope",
     "build_config=$BuildConfig",
     "strict=$Strict",
@@ -1118,6 +1410,11 @@ if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $packagedArtifact -ne "not
     "pdb_reference_check=$pdbReferenceCheck",
     "cv2pdb_check=$cv2pdbCheck",
     "runtime_smoke_check=$runtimeSmokeCheck",
+    "runtime_version_smoke=$runtimeVersionSmokeCheck",
+    "runtime_real_validation=$runtimeRealValidation",
+    "xemu_log_status=$xemuLogStatus",
+    "la_bb_end_status=$laBbEndStatus",
+    "d8003_check=$d8003Check",
     "packaged_artifact=$packagedArtifact"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 
@@ -1140,6 +1437,14 @@ if ($null -ne $buildExit -and $buildExit -ne 0) {
         End-Phase "probe"
         Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
         exit $buildExit
+    }
+}
+if ($validationExit -ne 0) {
+    Write-Warning "Windows MSVC native strict validation failed. Logs were written to $logsDir."
+    if ($Strict) {
+        End-Phase "probe"
+        Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
+        exit $validationExit
     }
 }
 
