@@ -362,6 +362,7 @@ function Invoke-RuntimeSmokeTest {
             Add-Content -Path $smokeLog -Value "la_bb_end=absent"
         }
     } else {
+        "not_found" | Set-Content -Path $xemuLogDestination
         Add-Content -Path $smokeLog -Value "xemu_log=not_found"
     }
 
@@ -525,6 +526,8 @@ function Invoke-AllBuildConfigs {
         "dependents.log" = "dependents.log"
         "runtime-smoke.log" = "runtime-smoke.log"
         "dumpbin-headers.txt" = "dumpbin-headers.txt"
+        "pdb-check.log" = "pdb-check.log"
+        "xemu.log" = "xemu.log"
     }
     foreach ($entry in $aggregateLogs.GetEnumerator()) {
         $aggregatePath = Join-Path $logsDir $entry.Key
@@ -536,6 +539,27 @@ function Invoke-AllBuildConfigs {
                 Get-Content -Path $sourcePath | Add-Content -Path $aggregatePath
             } else {
                 Add-Content -Path $aggregatePath -Value "not_found"
+            }
+        }
+    }
+
+    foreach ($logName in @(
+        "build-output.log",
+        "meson-log.txt",
+        "msvc-cl-wrapper.log",
+        "where-link.log",
+        "xemu-version-diagnostics.log",
+        "meson-targets.json",
+        "config.log"
+    )) {
+        $indexPath = Join-Path $logsDir $logName
+        "build_config=all" | Set-Content -Path $indexPath
+        foreach ($config in $configs) {
+            $sourcePath = Join-Path (Join-Path $logsDir $config) $logName
+            if (Test-Path $sourcePath) {
+                Add-Content -Path $indexPath -Value "$config=$config/$logName"
+            } else {
+                Add-Content -Path $indexPath -Value "$config=not_found"
             }
         }
     }
@@ -938,16 +962,24 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
 if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
     Start-Phase "full validation"
     try {
+        $pdbCheckLog = Join-Path $logsDir "pdb-check.log"
+        @(
+            "build_config=$BuildConfig",
+            "build_scope=$BuildScope"
+        ) | Set-Content -Path $pdbCheckLog
+
         $requiresPdb = $BuildConfig -ne "release"
         $finalExecutable = Find-FinalExecutable -Root $buildPath
         if (-not $finalExecutable) {
             Write-Warning "FAIL: xemu/qemu-system-i386 executable was not found."
+            Add-Content -Path $pdbCheckLog -Value "binary=not_found"
             Get-ChildItem -Path $buildPath -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
                 Select-Object -ExpandProperty FullName |
                 Set-Content -Path (Join-Path $logsDir "exe-files.txt")
             $buildExit = 1
         } else {
             Write-Host "Binary found: $($finalExecutable.FullName)"
+            Add-Content -Path $pdbCheckLog -Value "binary=$($finalExecutable.FullName)"
 
             if ($requiresPdb) {
                 $matchingPdb = Join-Path $finalExecutable.DirectoryName "$($finalExecutable.BaseName).pdb"
@@ -970,6 +1002,7 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
 
                 if ($finalPdb) {
                     Write-Host "PDB found: $($finalPdb.FullName)"
+                    Add-Content -Path $pdbCheckLog -Value "pdb=$($finalPdb.FullName)"
                 }
 
                 $dumpbinOutput = & dumpbin.exe /headers $finalExecutable.FullName 2>&1
@@ -978,13 +1011,16 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
                 if ($dumpbinExit -ne 0 -or -not ($dumpbinOutput | Select-String -Pattern "RSDS|PDB" -CaseSensitive:$false)) {
                     Write-Warning "FAIL: no CodeView/RSDS/PDB reference was found in the binary."
                     $pdbReferenceCheck = "failed"
+                    Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=failed"
                     $buildExit = 1
                 } else {
                     Write-Host "OK: CodeView/RSDS/PDB reference found in binary."
                     $pdbReferenceCheck = "passed"
+                    Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=passed"
                 }
             } else {
                 $pdbReferenceCheck = "not_required_release"
+                Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=not_required_release"
             }
         }
 
@@ -1022,9 +1058,11 @@ if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
 $dependentsLog = Join-Path $logsDir "dependents.log"
 $layoutLog = Join-Path $logsDir "artifact-layout.log"
 $runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
+$pdbCheckLog = Join-Path $logsDir "pdb-check.log"
 if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
 if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
 if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
+if (-not (Test-Path $pdbCheckLog)) { "not_run" | Set-Content -Path $pdbCheckLog }
 
 if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
     "" | Set-Content -Path $dependentsLog
