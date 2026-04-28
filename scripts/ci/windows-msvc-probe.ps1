@@ -698,7 +698,7 @@ function Invoke-AllBuildConfigs {
         $statusLines += "$config.runtime_real_validation=$(Get-StatusValue -StatusPath $statusPath -Key "runtime_real_validation")"
         $statusLines += "$config.xemu_log_status=$(Get-StatusValue -StatusPath $statusPath -Key "xemu_log_status")"
         $statusLines += "$config.la_bb_end_status=$(Get-StatusValue -StatusPath $statusPath -Key "la_bb_end_status")"
-        $statusLines += "$config.d8003_check=$(Get-StatusValue -StatusPath $statusPath -Key "d8003_check")"
+        $statusLines += "$config.missing_source_filename_check=$(Get-StatusValue -StatusPath $statusPath -Key "missing_source_filename_check")"
         $statusLines += "$config.validation_exit_code=$(Get-StatusValue -StatusPath $statusPath -Key "validation_exit_code")"
         $statusLines += "$config.packaged_artifact=$(Get-StatusValue -StatusPath $statusPath -Key "packaged_artifact")"
 
@@ -726,7 +726,7 @@ function Invoke-AllBuildConfigs {
         "xemu.log" = "xemu.log"
         "xemu-real.log" = "xemu-real.log"
         "xemu-log-search.log" = "xemu-log-search.log"
-        "d8003-matches.txt" = "d8003-matches.txt"
+        "missing-source-filename-matches.txt" = "missing-source-filename-matches.txt"
         "strict-validation-failures.txt" = "strict-validation-failures.txt"
     }
     foreach ($entry in $aggregateLogs.GetEnumerator()) {
@@ -936,7 +936,7 @@ if ($compilerCommand -eq "clang-cl.exe") {
     @(
         "compiler=$compilerCommand",
         "cl_version_probe=skipped",
-        "reason=cl /Bv without a source emits D8003"
+        "reason=cl /Bv without a source emits a missing-source-filename diagnostic"
     ) | Set-Content -Path $clVersionLog
 }
 python --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "python-version.log")
@@ -1284,7 +1284,7 @@ $runtimeRealSmokeLog = Join-Path $logsDir "runtime-real-smoke.log"
 $pdbCheckLog = Join-Path $logsDir "pdb-check.log"
 $xemuLog = Join-Path $logsDir "xemu.log"
 $xemuLogSearchLog = Join-Path $logsDir "xemu-log-search.log"
-$d8003MatchesLog = Join-Path $logsDir "d8003-matches.txt"
+$d8003MatchesLog = Join-Path $logsDir "missing-source-filename-matches.txt"
 if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
 if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
 if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
@@ -1372,11 +1372,11 @@ if ($d8003Matches) {
     $d8003Check = "found"
     $d8003Matches |
         ForEach-Object { "$($_.Path):$($_.LineNumber): $($_.Line)" } |
-        Set-Content -Path (Join-Path $logsDir "d8003-matches.txt")
-    $validationFailures += "D8003 present in logs"
+        Set-Content -Path (Join-Path $logsDir "missing-source-filename-matches.txt")
+    $validationFailures += "MSVC missing-source-filename diagnostic present in logs"
 } else {
     $d8003Check = "absent"
-    "D8003=absent" | Set-Content -Path (Join-Path $logsDir "d8003-matches.txt")
+    "missing_source_filename=absent" | Set-Content -Path (Join-Path $logsDir "missing-source-filename-matches.txt")
 }
 
 if ($BuildScope -eq "full") {
@@ -1414,7 +1414,7 @@ if ($validationFailures) {
     "runtime_real_validation=$runtimeRealValidation",
     "xemu_log_status=$xemuLogStatus",
     "la_bb_end_status=$laBbEndStatus",
-    "d8003_check=$d8003Check",
+    "missing_source_filename_check=$d8003Check",
     "packaged_artifact=$packagedArtifact"
 ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 

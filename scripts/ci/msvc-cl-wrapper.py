@@ -536,7 +536,7 @@ def main():
         if compiler_name.startswith("clang-cl"):
             subprocess.run([compiler, "--version"], check=False)
         else:
-            print("msvc-cl-wrapper: cl.exe version probe skipped; cl /Bv without a source emits D8003")
+            print("msvc-cl-wrapper: cl.exe version probe skipped; cl /Bv without a source emits a missing-source-filename diagnostic")
         return 0
     if "-Wl,--version" in args:
         subprocess.run(["link.exe", "/?"], check=False)
