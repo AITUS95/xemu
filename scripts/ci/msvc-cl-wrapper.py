@@ -62,6 +62,8 @@ KNOWN_PASSTHROUGH_FLAGS = {
     "-fchar8_t",
     "-ferror-limit=5",
     "-fmax-errors=5",
+    "-mpclmul",
+    "-msse4.1",
 }
 
 BUILD_CONFIG = os.environ.get("MSVC_CL_WRAPPER_BUILD_CONFIG", "profile").lower()
