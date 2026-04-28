@@ -1059,10 +1059,12 @@ $dependentsLog = Join-Path $logsDir "dependents.log"
 $layoutLog = Join-Path $logsDir "artifact-layout.log"
 $runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
 $pdbCheckLog = Join-Path $logsDir "pdb-check.log"
+$xemuLog = Join-Path $logsDir "xemu.log"
 if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
 if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
 if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
 if (-not (Test-Path $pdbCheckLog)) { "not_run" | Set-Content -Path $pdbCheckLog }
+if (-not (Test-Path $xemuLog)) { "not_run" | Set-Content -Path $xemuLog }
 
 if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
     "" | Set-Content -Path $dependentsLog
