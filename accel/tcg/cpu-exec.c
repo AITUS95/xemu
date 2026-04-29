@@ -1110,6 +1110,7 @@ static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
         cpu = saved_cpu;
         sc = saved_sc;
+        current_cpu = cpu;
 #endif
         cpu_exec_longjmp_cleanup(cpu);
     }
