@@ -1109,17 +1109,8 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
 static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
-#ifdef QEMU_WIN32_SIGJMP_DEFINED
-    CPUState * volatile saved_cpu = cpu;
-    SyncClocks * volatile saved_sc = sc;
-#endif
-
     /* Prepare setjmp context for exception handling. */
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
-#ifdef QEMU_WIN32_SIGJMP_DEFINED
-        cpu = saved_cpu;
-        sc = saved_sc;
-#endif
         cpu_exec_longjmp_cleanup(cpu);
     }
 
