@@ -4330,6 +4330,20 @@ static void i386_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
     tcg_gen_insn_start(pc_arg, dc->cc_op);
 }
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+static int __attribute__((noinline))
+i386_tr_translate_insn_setjmp(DisasContext *dc, CPUState *cpu)
+{
+    int ret = sigsetjmp(dc->jmpbuf, 0);
+
+    if (ret == 0) {
+        disas_insn(dc, cpu);
+    }
+
+    return ret;
+}
+#endif
+
 static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
     DisasContext *dc = container_of(dcbase, DisasContext, base);
@@ -4352,9 +4366,15 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     }
 #endif
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    switch (i386_tr_translate_insn_setjmp(dc, cpu)) {
+#else
     switch (sigsetjmp(dc->jmpbuf, 0)) {
+#endif
     case 0:
+#ifndef QEMU_WIN32_SIGJMP_DEFINED
         disas_insn(dc, cpu);
+#endif
         break;
     case 1:
         gen_exception_gpf(dc);
