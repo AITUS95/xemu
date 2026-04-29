@@ -15,6 +15,7 @@ on:
       - "include/**"
       - "host/**"
       - "hw/**"
+      - "target/**"
       - "tcg/**"
       - "ui/**"
       - "util/**"

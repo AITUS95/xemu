@@ -4333,9 +4333,9 @@ static void i386_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
 static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
     DisasContext *dc = container_of(dcbase, DisasContext, base);
-    bool orig_cc_op_dirty = dc->cc_op_dirty;
-    CCOp orig_cc_op = dc->cc_op;
-    target_ulong orig_pc_save = dc->pc_save;
+    volatile bool orig_cc_op_dirty = dc->cc_op_dirty;
+    volatile CCOp orig_cc_op = dc->cc_op;
+    volatile target_ulong orig_pc_save = dc->pc_save;
 
 #ifdef TARGET_VSYSCALL_PAGE
     /*
@@ -4358,9 +4358,15 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     case 2:
         /* Restore state that may affect the next instruction. */
         dc->pc = dc->base.pc_next;
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        dc->cc_op_dirty = orig_cc_op_dirty;
+        dc->cc_op = orig_cc_op;
+        dc->pc_save = orig_pc_save;
+#else
         assert(dc->cc_op_dirty == orig_cc_op_dirty);
         assert(dc->cc_op == orig_cc_op);
         assert(dc->pc_save == orig_pc_save);
+#endif
         dc->base.num_insns--;
         tcg_remove_ops_after(dc->prev_insn_end);
         dc->base.insn_start = dc->prev_insn_start;
