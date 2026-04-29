@@ -229,7 +229,11 @@ typedef struct DisasContext {
     TCGv_i32 tmp2_i32;
     TCGv_i64 tmp1_i64;
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    jmp_buf jmpbuf;
+#else
     sigjmp_buf jmpbuf;
+#endif
     TCGOp *prev_insn_start;
     TCGOp *prev_insn_end;
 
@@ -239,6 +243,14 @@ typedef struct DisasContext {
     TCGv_fp fpregs[8];
     TCGv_fp ft0;
 } DisasContext;
+
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+#define i386_sigsetjmp(env) setjmp(env)
+#define i386_siglongjmp(env, val) longjmp(env, val)
+#else
+#define i386_sigsetjmp(env) sigsetjmp(env, 0)
+#define i386_siglongjmp(env, val) siglongjmp(env, val)
+#endif
 
 /*
  * Point EIP to next instruction before ending translation.
@@ -2163,7 +2175,7 @@ static uint64_t advance_pc(CPUX86State *env, DisasContext *s, int num_bytes)
     /* This is a subsequent insn that crosses a page boundary.  */
     if (s->base.num_insns > 1 &&
         !translator_is_same_page(&s->base, s->pc + num_bytes - 1)) {
-        siglongjmp(s->jmpbuf, 2);
+        i386_siglongjmp(s->jmpbuf, 2);
     }
 
     s->pc += num_bytes;
@@ -2177,7 +2189,7 @@ static uint64_t advance_pc(CPUX86State *env, DisasContext *s, int num_bytes)
             (void)translator_ldub(env, &s->base,
                                   (s->pc - 1) & TARGET_PAGE_MASK);
         }
-        siglongjmp(s->jmpbuf, 1);
+        i386_siglongjmp(s->jmpbuf, 1);
     }
 
     return pc;
@@ -4334,7 +4346,7 @@ static void i386_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
 static int __attribute__((noinline))
 i386_tr_translate_insn_setjmp(DisasContext *dc, CPUState *cpu)
 {
-    int ret = sigsetjmp(dc->jmpbuf, 0);
+    int ret = i386_sigsetjmp(dc->jmpbuf);
 
     if (ret == 0) {
         disas_insn(dc, cpu);
@@ -4369,7 +4381,7 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
     switch (i386_tr_translate_insn_setjmp(dc, cpu)) {
 #else
-    switch (sigsetjmp(dc->jmpbuf, 0)) {
+    switch (i386_sigsetjmp(dc->jmpbuf)) {
 #endif
     case 0:
 #ifndef QEMU_WIN32_SIGJMP_DEFINED
