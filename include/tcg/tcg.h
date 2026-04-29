@@ -335,7 +335,7 @@ typedef struct TCGTempSet {
 typedef uint32_t TCGLifeData;
 
 struct TCGOp {
-    TCGOpcode opc   : 8;
+    unsigned opc    : 8;
     unsigned nargs  : 8;
 
     /* Parameters for this opcode.  See below.  */
