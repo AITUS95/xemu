@@ -464,10 +464,22 @@ struct TCGContext {
     uint64_t *gen_insn_data;
 
     /* Exit to translator on overflow. */
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    jmp_buf jmp_trans;
+#else
     sigjmp_buf jmp_trans;
+#endif
 
     void *disas_ctx;
 };
+
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+#define tcg_trans_setjmp(env) setjmp(env)
+#define tcg_trans_longjmp(env, val) longjmp(env, val)
+#else
+#define tcg_trans_setjmp(env) sigsetjmp(env, 0)
+#define tcg_trans_longjmp(env, val) siglongjmp(env, val)
+#endif
 
 static inline bool temp_readonly(TCGTemp *ts)
 {
