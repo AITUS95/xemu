@@ -1118,7 +1118,8 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
     return ret;
 }
 
-static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
+static int __attribute__((noinline))
+cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
     /* Prepare setjmp context for exception handling. */
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
