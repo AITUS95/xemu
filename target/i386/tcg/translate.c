@@ -4336,6 +4336,10 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     volatile bool orig_cc_op_dirty = dc->cc_op_dirty;
     volatile CCOp orig_cc_op = dc->cc_op;
     volatile target_ulong orig_pc_save = dc->pc_save;
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    TCGOp * volatile orig_prev_insn_end = dc->prev_insn_end;
+    TCGOp * volatile orig_prev_insn_start = dc->prev_insn_start;
+#endif
 
 #ifdef TARGET_VSYSCALL_PAGE
     /*
@@ -4362,14 +4366,16 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
         dc->cc_op_dirty = orig_cc_op_dirty;
         dc->cc_op = orig_cc_op;
         dc->pc_save = orig_pc_save;
+        tcg_remove_ops_after(orig_prev_insn_end);
+        dc->base.insn_start = orig_prev_insn_start;
 #else
         assert(dc->cc_op_dirty == orig_cc_op_dirty);
         assert(dc->cc_op == orig_cc_op);
         assert(dc->pc_save == orig_pc_save);
-#endif
-        dc->base.num_insns--;
         tcg_remove_ops_after(dc->prev_insn_end);
         dc->base.insn_start = dc->prev_insn_start;
+#endif
+        dc->base.num_insns--;
         dc->base.is_jmp = DISAS_TOO_MANY;
         return;
     default:
