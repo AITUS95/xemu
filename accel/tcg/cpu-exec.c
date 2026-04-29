@@ -1155,7 +1155,14 @@ int cpu_exec(CPUState *cpu)
      */
     init_delay_params(&sc, cpu);
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    qemu_win_sigjmp_cpu = NULL;
+#endif
     ret = cpu_exec_setjmp(cpu, &sc);
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    cpu = cpu_exec_restore_longjmp_cpu(cpu);
+    qemu_win_sigjmp_cpu = NULL;
+#endif
 
     cpu_exec_exit(cpu);
     return ret;
