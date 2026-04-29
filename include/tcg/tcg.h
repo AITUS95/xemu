@@ -298,7 +298,8 @@ typedef struct TCGTemp {
     TCGTempVal val_type:8;
     TCGType base_type:8;
     TCGType type:8;
-    TCGTempKind kind:3;
+    /* TEMP_CONST is 4; keep enough bits even for signed enum bitfields. */
+    TCGTempKind kind:4;
     unsigned int indirect_reg:1;
     unsigned int indirect_base:1;
     unsigned int mem_coherent:1;
