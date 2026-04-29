@@ -89,13 +89,18 @@ void __attribute__((noreturn)) __mingw_longjmp(jmp_buf, int);
      __has_builtin(__builtin_setjmp) && __has_builtin(__builtin_longjmp)
 typedef struct QEMUWinSigJmpBuf {
     void *buf[5];
-    int value;
 } qemu_win_sigjmp_buf[1];
+extern __thread int qemu_win_sigjmp_value;
+static inline int qemu_win_sigjmp_normalize_value(int value)
+{
+    return value ? value : 1;
+}
 #  define sigjmp_buf qemu_win_sigjmp_buf
 #  define sigsetjmp(env, savemask) \
-    ((void)(savemask), (__builtin_setjmp((env)[0].buf) ? (env)[0].value : 0))
+    ((void)(savemask), (__builtin_setjmp((env)[0].buf) ? qemu_win_sigjmp_value : 0))
 #  define siglongjmp(env, val) \
-    ((env)[0].value = (val) ? (val) : 1, __builtin_longjmp((env)[0].buf, 1))
+    (qemu_win_sigjmp_value = qemu_win_sigjmp_normalize_value(val), \
+     __builtin_longjmp((env)[0].buf, 1))
 #  define QEMU_WIN32_SIGJMP_DEFINED 1
 # else
 #  undef setjmp

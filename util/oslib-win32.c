@@ -36,6 +36,10 @@
 #include "qemu/error-report.h"
 #include <malloc.h>
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+__thread int qemu_win_sigjmp_value;
+#endif
+
 static int get_allocation_granularity(void)
 {
     SYSTEM_INFO system_info;
