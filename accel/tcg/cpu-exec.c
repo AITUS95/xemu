@@ -600,8 +600,17 @@ static void cpu_exec_exit(CPUState *cpu)
     }
 }
 
-static void cpu_exec_longjmp_cleanup(CPUState *cpu)
+static void __attribute__((noinline)) cpu_exec_longjmp_cleanup(CPUState *cpu)
 {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    /*
+     * clang-cl's builtin longjmp path can invalidate TLS base pointers that
+     * were cached in the setjmp caller's frame. Refresh current_cpu here, in a
+     * separate noinline frame, so TLS is resolved after the jump.
+     */
+    current_cpu = cpu;
+#endif
+
     /* Non-buggy compilers preserve this; assert the correct value. */
     g_assert(cpu == current_cpu);
 
@@ -1110,7 +1119,6 @@ static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
         cpu = saved_cpu;
         sc = saved_sc;
-        current_cpu = cpu;
 #endif
         cpu_exec_longjmp_cleanup(cpu);
     }
