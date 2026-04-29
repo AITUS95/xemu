@@ -600,6 +600,14 @@ static void cpu_exec_exit(CPUState *cpu)
     }
 }
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+static CPUState *__attribute__((noinline))
+cpu_exec_restore_longjmp_cpu(CPUState *fallback)
+{
+    return qemu_win_sigjmp_cpu ? qemu_win_sigjmp_cpu : fallback;
+}
+#endif
+
 static void __attribute__((noinline)) cpu_exec_longjmp_cleanup(CPUState *cpu)
 {
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
@@ -684,6 +692,9 @@ void cpu_exec_step_atomic(CPUState *cpu)
         cpu_tb_exec(cpu, tb, &tb_exit);
         cpu_exec_exit(cpu);
     } else {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        cpu = cpu_exec_restore_longjmp_cpu(cpu);
+#endif
         cpu_exec_longjmp_cleanup(cpu);
     }
 
@@ -1111,6 +1122,9 @@ static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
     /* Prepare setjmp context for exception handling. */
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        cpu = cpu_exec_restore_longjmp_cpu(cpu);
+#endif
         cpu_exec_longjmp_cleanup(cpu);
     }
 

@@ -38,6 +38,7 @@
 
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
 __thread int qemu_win_sigjmp_value;
+__thread void *qemu_win_sigjmp_cpu;
 #endif
 
 static int get_allocation_granularity(void)

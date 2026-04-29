@@ -91,6 +91,7 @@ typedef struct QEMUWinSigJmpBuf {
     void *buf[5];
 } qemu_win_sigjmp_buf[1];
 extern __thread int qemu_win_sigjmp_value;
+extern __thread void *qemu_win_sigjmp_cpu;
 static inline int qemu_win_sigjmp_normalize_value(int value)
 {
     return value ? value : 1;
