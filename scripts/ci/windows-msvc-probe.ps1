@@ -187,6 +187,41 @@ function Copy-VcpkgDiagnostics {
         }
 }
 
+function Repair-VcpkgCmakeTools {
+    param(
+        [string]$VcpkgRoot,
+        [string]$LogsDir
+    )
+
+    $log = Join-Path $LogsDir "vcpkg-tool-repair.log"
+    $toolsRoot = Join-Path $VcpkgRoot "downloads\tools"
+    if (-not (Test-Path -LiteralPath $toolsRoot)) {
+        "tools_root=missing" | Set-Content -Path $log
+        return
+    }
+
+    "tools_root=$toolsRoot" | Set-Content -Path $log
+    Get-ChildItem -Path $toolsRoot -Directory -Filter "cmake-*-windows*" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $module = Get-ChildItem -Path $_.FullName -Recurse -File -Filter "CMakeSystemSpecificInitialize.cmake" -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($module) {
+                Add-Content -Path $log -Value "cmake_ok=$($_.FullName)"
+                return
+            }
+
+            Add-Content -Path $log -Value "cmake_corrupt_removed=$($_.FullName)"
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+
+            $downloadsRoot = Join-Path $VcpkgRoot "downloads"
+            Get-ChildItem -Path $downloadsRoot -File -Filter "cmake-*.zip" -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    Add-Content -Path $log -Value "cmake_zip_removed=$($_.FullName)"
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+                }
+        }
+}
+
 function Get-SafeFileName {
     param([string]$PathOrName)
 
@@ -967,6 +1002,7 @@ Start-Phase "vcpkg dependency install"
 $vcpkg = Find-Vcpkg
 $vcpkgRoot = Split-Path $vcpkg -Parent
 $env:VCPKG_ROOT = $vcpkgRoot
+Repair-VcpkgCmakeTools -VcpkgRoot $vcpkgRoot -LogsDir $logsDir
 if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     $binarySources = @("clear")
     if ($env:VCPKG_DEFAULT_BINARY_CACHE) {
