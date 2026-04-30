@@ -5,6 +5,7 @@
 /build-msvc-profile/
 /build-msvc-release/
 /.cache/
+/.vs/
 /.vscode/
 *.pyc
 .sdk

@@ -1,0 +1,93 @@
+{
+  "version": "0.2.1",
+  "tasks": [
+    {
+      "taskLabel": "xemu MSVC Debug",
+      "taskName": "xemu MSVC Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
+        "-Architecture",
+        "amd64",
+        "-QemuCpu",
+        "x86_64",
+        "-BuildScope",
+        "full",
+        "-BuildConfig",
+        "debug"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Profile",
+      "taskName": "xemu MSVC Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
+        "-Architecture",
+        "amd64",
+        "-QemuCpu",
+        "x86_64",
+        "-BuildScope",
+        "full",
+        "-BuildConfig",
+        "profile"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Release",
+      "taskName": "xemu MSVC Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
+        "-Architecture",
+        "amd64",
+        "-QemuCpu",
+        "x86_64",
+        "-BuildScope",
+        "full",
+        "-BuildConfig",
+        "release"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean",
+      "taskName": "xemu MSVC Clean",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; @('build-msvc','build-msvc-debug','build-msvc-profile','build-msvc-release','msvc-artifacts','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }"
+      ]
+    }
+  ]
+}

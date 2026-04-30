@@ -1,0 +1,46 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "msvc-artifacts\\debug\\xemu.exe",
+      "program": "${workspaceRoot}\\msvc-artifacts\\debug\\xemu.exe",
+      "name": "xemu MSVC Debug",
+      "debugType": "native",
+      "currentDir": "${workspaceRoot}",
+      "cwd": "${workspaceRoot}",
+      "args": []
+    },
+    {
+      "type": "default",
+      "project": "msvc-artifacts\\profile\\xemu.exe",
+      "program": "${workspaceRoot}\\msvc-artifacts\\profile\\xemu.exe",
+      "name": "xemu MSVC Profile",
+      "debugType": "native",
+      "currentDir": "${workspaceRoot}",
+      "cwd": "${workspaceRoot}",
+      "args": []
+    },
+    {
+      "type": "default",
+      "project": "msvc-artifacts\\release\\xemu.exe",
+      "program": "${workspaceRoot}\\msvc-artifacts\\release\\xemu.exe",
+      "name": "xemu MSVC Release",
+      "debugType": "native",
+      "currentDir": "${workspaceRoot}",
+      "cwd": "${workspaceRoot}",
+      "args": []
+    },
+    {
+      "type": "default",
+      "project": "build-msvc\\qemu-system-i386w.exe",
+      "program": "${workspaceRoot}\\build-msvc\\qemu-system-i386w.exe",
+      "name": "xemu MSVC Fallback build-msvc",
+      "debugType": "native",
+      "currentDir": "${workspaceRoot}",
+      "cwd": "${workspaceRoot}",
+      "args": []
+    }
+  ]
+}
