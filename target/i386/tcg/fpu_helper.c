@@ -73,7 +73,8 @@
 #define floatx80_ln2_d make_floatx80(0x3ffe, 0xb17217f7d1cf79abLL)
 #define floatx80_pi_d make_floatx80(0x4000, 0xc90fdaa22168c234LL)
 
-#if defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU)
+#if defined(XBOX) && (defined(__x86_64__) || defined(_M_X64)) && \
+    defined(CONFIG_XEMU_HARD_FPU)
 #if defined(USE_HARD_FPU) && defined(CONFIG_XEMU_HARD_FPU_NATIVE)
 /*
  * FIXME: rounding and exceptions
@@ -264,7 +265,7 @@ floatx80 int32_to_floatx80__hard(int32_t a, float_status *status)
 #define helper_fsave          MAP_HELPER_SOFT_HARD(fsave)
 #define helper_frstor         MAP_HELPER_SOFT_HARD(frstor)
 
-#endif /* defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU) */
+#endif /* XBOX && x86_64 && CONFIG_XEMU_HARD_FPU */
 
 static inline void fpush(CPUX86State *env)
 {
