@@ -74,7 +74,7 @@
 #define floatx80_pi_d make_floatx80(0x4000, 0xc90fdaa22168c234LL)
 
 #if defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU)
-#ifdef USE_HARD_FPU
+#if defined(USE_HARD_FPU) && defined(CONFIG_XEMU_HARD_FPU_NATIVE)
 /*
  * FIXME: rounding and exceptions
  */
@@ -175,7 +175,7 @@ floatx80 int32_to_floatx80__hard(int32_t a, float_status *status)
 #define float64_to_floatx80   float64_to_floatx80__hard
 #define floatx80_to_float64   floatx80_to_float64__hard
 #define int32_to_floatx80     int32_to_floatx80__hard
-#endif /* USE_HARD_FPU */
+#endif /* defined(USE_HARD_FPU) && defined(CONFIG_XEMU_HARD_FPU_NATIVE) */
 
 #ifdef USE_HARD_FPU
 #define MAP_HELPER_SOFT_HARD(func) helper_ ## func ## __hard

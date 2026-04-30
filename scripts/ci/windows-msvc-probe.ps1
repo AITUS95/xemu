@@ -606,7 +606,7 @@ function Invoke-AllBuildConfigs {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
     $logsDir = Join-Path $repoRoot "msvc-probe-logs"
     $logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
-    $artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
+    $artifactsRoot = Join-Path $repoRoot "msvc-artifacts"
     $phaseLog = Join-Path $logsDir "phase-timings.log"
 
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $logsDir, $logsArtifactRoot, $artifactsRoot
@@ -676,7 +676,7 @@ function Invoke-AllBuildConfigs {
             }
         }
 
-        Write-Host "Windows MSVC native $config exit code: $childExit"
+        Write-Host "Windows MSVC $config exit code: $childExit"
         Write-Host "Last 80 lines of ${consoleLog}:"
         Get-Content -Path $consoleLog -Tail 80
 
@@ -822,7 +822,7 @@ $logsDirName = if ($env:MSVC_PROBE_LOGS_DIR_NAME) { $env:MSVC_PROBE_LOGS_DIR_NAM
 $logsDir = Join-Path $repoRoot $logsDirName
 $logsDirBash = "../$logsDirName"
 $logsArtifactRoot = Join-Path $repoRoot "xemu-msvc-logs"
-$artifactsRoot = Join-Path $repoRoot "msvc-native-artifacts"
+$artifactsRoot = Join-Path $repoRoot "msvc-artifacts"
 $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 $finalExecutable = $null
@@ -855,7 +855,7 @@ $script:PhaseEvents | Set-Content -Path $script:PhaseLog
 Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture
 
-Write-Host "Windows MSVC native build environment"
+Write-Host "Windows MSVC build environment"
 Write-Host "Repository: $repoRoot"
 Write-Host "Build dir:  $buildPath"
 Write-Host "Arch:       $Architecture"
@@ -1154,7 +1154,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     }
 
     if ($null -eq $buildExit -or $buildExit -eq 0) {
-        $compileLine = "echo Windows MSVC native ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ${logsDirBash}/build-output.log 2>&1"
+        $compileLine = "echo Windows MSVC ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ${logsDirBash}/build-output.log 2>&1"
 
         $buildCommand = @(
             "set -o pipefail",
@@ -1432,7 +1432,7 @@ Write-Host "Phase timings:"
 Get-Content -Path $script:PhaseLog
 
 if ($configureExit -ne 0) {
-    Write-Warning "Windows MSVC native configure failed with exit code $configureExit. Logs were written to $logsDir."
+    Write-Warning "Windows MSVC configure failed with exit code $configureExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
         Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
@@ -1440,7 +1440,7 @@ if ($configureExit -ne 0) {
     }
 }
 if ($null -ne $buildExit -and $buildExit -ne 0) {
-    Write-Warning "Windows MSVC native build failed with exit code $buildExit. Logs were written to $logsDir."
+    Write-Warning "Windows MSVC build failed with exit code $buildExit. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
         Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
@@ -1448,7 +1448,7 @@ if ($null -ne $buildExit -and $buildExit -ne 0) {
     }
 }
 if ($validationExit -ne 0) {
-    Write-Warning "Windows MSVC native strict validation failed. Logs were written to $logsDir."
+    Write-Warning "Windows MSVC strict validation failed. Logs were written to $logsDir."
     if ($Strict) {
         End-Phase "probe"
         Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot

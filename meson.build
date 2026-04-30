@@ -2368,16 +2368,38 @@ if not get_option('libdw').auto() or \
                        required: get_option('libdw'))
 endif
 
-hard_fpu = false
-if host_arch == 'x86_64'
-  hard_fpu = cc.compiles('''
+hard_fpu = host_arch == 'x86_64'
+hard_fpu_native_long_double = false
+hard_fpu_native_float80 = false
+if hard_fpu
+  hard_fpu_native_long_double = cc.compiles('''
     #include <float.h>
     #if LDBL_MANT_DIG <= DBL_MANT_DIG
     # error long double does not provide extended precision
     #endif
     int main(void) { return 0; }
   ''', name: 'host long double has extended precision')
+  if not hard_fpu_native_long_double
+    hard_fpu_native_float80 = cc.compiles('''
+      #if !defined(__clang__)
+      # error __float80 probe only supported with clang
+      #endif
+      typedef union {
+        struct {
+          unsigned long long low;
+          unsigned short high;
+        };
+        __float80 fval;
+      } XemuFloat80Probe;
+      int main(void) {
+        XemuFloat80Probe value = { 0 };
+        value.fval = (__float80)1.0;
+        return sizeof(value) < 10;
+      }
+    ''', name: 'host compiler supports __float80')
+  endif
 endif
+hard_fpu_native = hard_fpu_native_long_double or hard_fpu_native_float80
 
 vulkan = not_found
 libglslang = not_found
@@ -2705,6 +2727,8 @@ endif
 config_host_data.set('CONFIG_OPENGL', opengl.found())
 config_host_data.set('CONFIG_VULKAN', vulkan.found())
 config_host_data.set('CONFIG_XEMU_HARD_FPU', hard_fpu)
+config_host_data.set('CONFIG_XEMU_HARD_FPU_NATIVE', hard_fpu_native)
+config_host_data.set('CONFIG_XEMU_HARD_FPU_FLOAT80', hard_fpu_native_float80)
 config_host_data.set('CONFIG_PLUGIN', get_option('plugins'))
 config_host_data.set('CONFIG_RBD', rbd.found())
 config_host_data.set('CONFIG_RDMA', rdma.found())
@@ -5179,6 +5203,8 @@ summary_info += {'libusb':            libusb}
 summary_info += {'usb net redir':     usbredir}
 summary_info += {'OpenGL support (epoxy)': opengl}
 summary_info += {'Vulkan support':    vulkan}
+summary_info += {'Hard FPU emulation': hard_fpu}
+summary_info += {'Hard FPU native host type': hard_fpu_native_long_double ? 'long double' : (hard_fpu_native_float80 ? '__float80' : 'soft fallback')}
 summary_info += {'GBM':               gbm}
 summary_info += {'libiscsi support':  libiscsi}
 summary_info += {'libnfs support':    libnfs}

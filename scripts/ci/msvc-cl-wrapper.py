@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Minimal cl.exe adapter for the Windows MSVC native CI build.
+# Minimal cl.exe adapter for the Windows MSVC CI build.
 #
 # QEMU's configure script invokes the selected compiler with GCC-like command
 # line syntax.  This shim translates only the common probe/build flags needed

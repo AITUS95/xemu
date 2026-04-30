@@ -1,6 +1,7 @@
-name: Windows MSVC Native Build
+name: Windows MSVC Build
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
   VCPKG_FEATURE_FLAGS: binarycaching
 
@@ -27,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       build_scope:
-        description: "MSVC native build scope"
+        description: "MSVC build scope"
         required: false
         default: "fast"
         type: choice
@@ -36,7 +37,7 @@ on:
           - core
           - full
       build_config:
-        description: "MSVC native build configuration"
+        description: "MSVC build configuration"
         required: false
         default: "profile"
         type: choice
@@ -46,7 +47,7 @@ on:
           - release
           - all
       strict:
-        description: Fail the workflow when MSVC native validation fails
+        description: Fail the workflow when MSVC validation fails
         required: false
         type: boolean
         default: false
@@ -57,7 +58,7 @@ on:
         default: ""
 
 concurrency:
-  group: windows-msvc-native-${{ github.ref }}
+  group: windows-msvc-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -95,7 +96,7 @@ jobs:
             msvc-vcpkg-${{ runner.os }}-v1-
             msvc-vcpkg-${{ runner.os }}-
 
-      - name: Run Windows MSVC Native Build
+      - name: Run Windows MSVC Build
         shell: pwsh
         timeout-minutes: 60
         env:
@@ -124,11 +125,11 @@ jobs:
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Upload MSVC native logs
+      - name: Upload MSVC logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: xemu-msvc-logs
+          name: logs
           path: xemu-msvc-logs
           if-no-files-found: warn
 
@@ -136,22 +137,22 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: xemu-msvc-release
-          path: msvc-native-artifacts/release
+          name: release
+          path: msvc-artifacts/release
           if-no-files-found: ignore
 
       - name: Upload MSVC debug artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: xemu-msvc-debug
-          path: msvc-native-artifacts/debug
+          name: debug
+          path: msvc-artifacts/debug
           if-no-files-found: ignore
 
-      - name: Upload MSVC profiling artifact
+      - name: Upload MSVC profile artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: xemu-msvc-profiling
-          path: msvc-native-artifacts/profile
+          name: profile
+          path: msvc-artifacts/profile
           if-no-files-found: ignore
