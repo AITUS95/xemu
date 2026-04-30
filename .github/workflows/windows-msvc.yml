@@ -84,7 +84,7 @@ jobs:
           fetch-tags: true
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .vcpkg-binary-cache
@@ -116,7 +116,7 @@ jobs:
 
       - name: Save vcpkg binary cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .vcpkg-binary-cache

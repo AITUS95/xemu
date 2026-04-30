@@ -2400,6 +2400,12 @@ if hard_fpu
   endif
 endif
 hard_fpu_native = hard_fpu_native_long_double or hard_fpu_native_float80
+hard_fpu_native_host_type = 'soft fallback'
+if hard_fpu_native_long_double
+  hard_fpu_native_host_type = 'long double'
+elif hard_fpu_native_float80
+  hard_fpu_native_host_type = '__float80'
+endif
 
 vulkan = not_found
 libglslang = not_found
@@ -5204,7 +5210,7 @@ summary_info += {'usb net redir':     usbredir}
 summary_info += {'OpenGL support (epoxy)': opengl}
 summary_info += {'Vulkan support':    vulkan}
 summary_info += {'Hard FPU emulation': hard_fpu}
-summary_info += {'Hard FPU native host type': hard_fpu_native_long_double ? 'long double' : (hard_fpu_native_float80 ? '__float80' : 'soft fallback')}
+summary_info += {'Hard FPU native host type': hard_fpu_native_host_type}
 summary_info += {'GBM':               gbm}
 summary_info += {'libiscsi support':  libiscsi}
 summary_info += {'libnfs support':    libnfs}
