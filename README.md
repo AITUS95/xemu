@@ -12,3 +12,8 @@ finishes, choose the `xemu MSVC Profile` startup target to run, debug, or profil
 `msvc-artifacts\profile\xemu.exe` with Visual Studio Performance Profiler or
 GitHub Copilot Profiler. Debug and release startup targets are also available
 for `msvc-artifacts\debug\xemu.exe` and `msvc-artifacts\release\xemu.exe`.
+
+Alternatively, open `xemu-msvc.vcxproj` directly in Visual Studio. It is a
+Makefile-style project that delegates Debug, Profile, Release, Clean, and
+Rebuild actions to the same MSVC probe script without replacing the Meson/QEMU
+build flow.
