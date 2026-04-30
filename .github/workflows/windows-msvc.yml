@@ -27,25 +27,6 @@ on:
       - "config_spec.yml"
   workflow_dispatch:
     inputs:
-      build_scope:
-        description: "MSVC build scope"
-        required: false
-        default: "fast"
-        type: choice
-        options:
-          - fast
-          - core
-          - full
-      build_config:
-        description: "MSVC build configuration"
-        required: false
-        default: "profile"
-        type: choice
-        options:
-          - debug
-          - profile
-          - release
-          - all
       strict:
         description: Fail the workflow when MSVC validation fails
         required: false
@@ -62,11 +43,12 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
-  configure:
-    name: Build with MSVC (${{ matrix.arch }})
+  build:
+    name: MSVC ${{ matrix.build_config }} (${{ matrix.arch }})
     runs-on: windows-2022
     timeout-minutes: 60
     strategy:
@@ -76,6 +58,15 @@ jobs:
           - arch: x64
             vc_arch: amd64
             qemu_cpu: x86_64
+            build_config: debug
+          - arch: x64
+            vc_arch: amd64
+            qemu_cpu: x86_64
+            build_config: profile
+          - arch: x64
+            vc_arch: amd64
+            qemu_cpu: x86_64
+            build_config: release
     steps:
       - name: Clone tree
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
@@ -91,7 +82,7 @@ jobs:
             C:\vcpkg\downloads
             C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             msvc-vcpkg-${{ runner.os }}-v1-
             msvc-vcpkg-${{ runner.os }}-
@@ -100,10 +91,10 @@ jobs:
         shell: pwsh
         timeout-minutes: 60
         env:
-          BUILD_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope || 'fast' }}
-          BUILD_CONFIG: ${{ github.event_name == 'workflow_dispatch' && inputs.build_config || 'profile' }}
-          STRICT: ${{ inputs.strict || 'false' }}
-          EXTRA_CONFIGURE_ARGS: ${{ inputs.configure_args || '' }}
+          BUILD_SCOPE: full
+          BUILD_CONFIG: ${{ matrix.build_config }}
+          STRICT: ${{ github.event_name == 'workflow_dispatch' && inputs.strict || 'false' }}
+          EXTRA_CONFIGURE_ARGS: ${{ github.event_name == 'workflow_dispatch' && inputs.configure_args || '' }}
         run: |
           $strict = [System.Convert]::ToBoolean($env:STRICT)
           .\scripts\ci\windows-msvc-probe.ps1 `
@@ -114,6 +105,47 @@ jobs:
             -ExtraConfigureArgs "$env:EXTRA_CONFIGURE_ARGS" `
             -Strict:$strict
 
+      - name: Check MSVC build status
+        if: always()
+        shell: pwsh
+        run: |
+          $statusPath = "msvc-probe-logs\status.txt"
+          if (-not (Test-Path $statusPath)) {
+            Write-Error "MSVC status file was not produced: $statusPath"
+            exit 1
+          }
+
+          $status = @{}
+          Get-Content $statusPath | ForEach-Object {
+            if ($_ -match "^([^=]+)=(.*)$") {
+              $status[$matches[1]] = $matches[2]
+            }
+          }
+
+          $failures = @()
+          foreach ($key in @("configure_exit_code", "build_exit_code")) {
+            if (-not $status.ContainsKey($key) -or $status[$key] -ne "0") {
+              $failures += "$key=$($status[$key])"
+            }
+          }
+
+          if ($status["cv2pdb_check"] -ne "absent") {
+            $failures += "cv2pdb_check=$($status["cv2pdb_check"])"
+          }
+          if ($status["missing_source_filename_check"] -ne "absent") {
+            $failures += "missing_source_filename_check=$($status["missing_source_filename_check"])"
+          }
+          if ("${{ matrix.build_config }}" -ne "release" -and $status["pdb_reference_check"] -ne "passed") {
+            $failures += "pdb_reference_check=$($status["pdb_reference_check"])"
+          }
+
+          if ($failures) {
+            Write-Error ("MSVC ${{ matrix.build_config }} build status failed: " + ($failures -join "; "))
+            exit 1
+          }
+
+          Write-Host "MSVC ${{ matrix.build_config }} build status passed."
+
       - name: Save vcpkg binary cache
         if: always()
         uses: actions/cache/save@v5
@@ -123,9 +155,42 @@ jobs:
             C:\vcpkg\downloads
             C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload MSVC logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: logs-${{ matrix.build_config }}
+          path: xemu-msvc-logs
+          if-no-files-found: warn
+
+      - name: Upload MSVC build artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: ${{ matrix.build_config }}
+          path: msvc-artifacts/${{ matrix.build_config }}
+          if-no-files-found: ignore
+
+  logs:
+    name: Merge MSVC logs
+    runs-on: ubuntu-24.04
+    needs: build
+    if: always()
+    steps:
+      - name: Download per-config logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p xemu-msvc-logs
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "logs-*" \
+            --dir xemu-msvc-logs || true
+          find xemu-msvc-logs -type f | sort
+
+      - name: Upload merged MSVC logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
@@ -133,26 +198,15 @@ jobs:
           path: xemu-msvc-logs
           if-no-files-found: warn
 
-      - name: Upload MSVC release artifact
+      - name: Delete per-config log artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
-        with:
-          name: release
-          path: msvc-artifacts/release
-          if-no-files-found: ignore
-
-      - name: Upload MSVC debug artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
-        with:
-          name: debug
-          path: msvc-artifacts/debug
-          if-no-files-found: ignore
-
-      - name: Upload MSVC profile artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
-        with:
-          name: profile
-          path: msvc-artifacts/profile
-          if-no-files-found: ignore
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $response = gh api "/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts" --paginate | ConvertFrom-Json
+          $artifacts = @($response.artifacts) | Where-Object { $_.name -like "logs-*" }
+          foreach ($artifact in $artifacts) {
+            Write-Host "Deleting temporary log artifact $($artifact.name) [$($artifact.id)]"
+            gh api -X DELETE "/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($artifact.id)"
+          }
