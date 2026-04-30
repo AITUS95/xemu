@@ -163,6 +163,42 @@ function Copy-ProbeArtifact {
     }
 }
 
+function Get-SafeFileName {
+    param([string]$PathOrName)
+
+    if (-not $PathOrName) {
+        return $null
+    }
+
+    $fileName = [System.IO.Path]::GetFileName($PathOrName.Trim().Trim('"'))
+    if (-not $fileName) {
+        return $null
+    }
+
+    if ($fileName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        return $null
+    }
+
+    return $fileName
+}
+
+function Get-CodeViewPdbNames {
+    param([object[]]$DumpbinOutput)
+
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $DumpbinOutput) {
+        $text = [string]$line
+        foreach ($match in [regex]::Matches($text, '(?i)([A-Za-z]:\\[^,\r\n]+?\.pdb|\\\\[^,\r\n]+?\.pdb|[^\\/:*?"<>|\s,]+\.pdb)')) {
+            $fileName = Get-SafeFileName -PathOrName $match.Groups[1].Value
+            if ($fileName -and -not $names.Contains($fileName)) {
+                $names.Add($fileName)
+            }
+        }
+    }
+
+    return @($names)
+}
+
 function Publish-LogsArtifact {
     param(
         [string]$LogsDir,
@@ -248,6 +284,12 @@ function Copy-RuntimeDllArtifacts {
         Copy-Item -LiteralPath $dll.FullName -Destination $Destination -Force
         $copied[$name.ToLowerInvariant()] = $dll.FullName
 
+        $dllPdb = Join-Path $dll.DirectoryName "$($dll.BaseName).pdb"
+        if (Test-Path -LiteralPath $dllPdb) {
+            Copy-Item -LiteralPath $dllPdb -Destination $Destination -Force
+            Add-Content -Path $DependentsLog -Value "packaged symbols: $dllPdb"
+        }
+
         Get-DumpbinDependentNames -BinaryPath $dll.FullName -LogPath $DependentsLog |
             ForEach-Object {
                 if (-not $copied.ContainsKey($_.ToLowerInvariant())) {
@@ -264,6 +306,7 @@ function Copy-MsvcPackage {
         [string]$ConfigName,
         [System.IO.FileInfo]$Executable,
         [System.IO.FileInfo]$Pdb,
+        [string[]]$EmbeddedPdbNames,
         [string[]]$DependencyDirs,
         [string]$ArtifactsRoot,
         [string]$DependentsLog,
@@ -283,7 +326,18 @@ function Copy-MsvcPackage {
 
     Copy-Item -LiteralPath $Executable.FullName -Destination (Join-Path $destination "xemu.exe") -Force
     if ($IncludePdb -and $Pdb) {
-        Copy-Item -LiteralPath $Pdb.FullName -Destination (Join-Path $destination "xemu.pdb") -Force
+        $pdbNames = New-Object System.Collections.Generic.List[string]
+        foreach ($name in @("xemu.pdb") + @($EmbeddedPdbNames)) {
+            $safeName = Get-SafeFileName -PathOrName $name
+            if ($safeName -and -not $pdbNames.Contains($safeName)) {
+                $pdbNames.Add($safeName)
+            }
+        }
+
+        foreach ($name in $pdbNames) {
+            Copy-Item -LiteralPath $Pdb.FullName -Destination (Join-Path $destination $name) -Force
+            Add-Content -Path $LayoutLog -Value "packaged pdb: $name"
+        }
     }
 
     Copy-RuntimeDllArtifacts `
@@ -778,6 +832,7 @@ function Invoke-AllBuildConfigs {
         "pdb_reference_check=see_config_logs",
         "cv2pdb_check=see_config_logs",
         "runtime_smoke_check=see_config_logs",
+        "embedded_pdb_names=see_config_logs",
         "packaged_artifact=$artifactsRoot"
     ) | Set-Content -Path (Join-Path $logsDir "status.txt")
 
@@ -827,6 +882,7 @@ $buildPath = Join-Path $repoRoot $BuildDir
 $wrapperLog = Join-Path $logsDir "msvc-cl-wrapper.log"
 $finalExecutable = $null
 $finalPdb = $null
+$embeddedPdbNames = @()
 $pdbReferenceCheck = "not_run"
 $cv2pdbCheck = "not_run"
 $runtimeSmokeCheck = "not_run"
@@ -1237,16 +1293,24 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
 
                 $dumpbinOutput = & dumpbin.exe /headers $finalExecutable.FullName 2>&1
                 $dumpbinOutput | Set-Content -Path (Join-Path $logsDir "dumpbin-headers.txt")
+                $embeddedPdbNames = Get-CodeViewPdbNames -DumpbinOutput $dumpbinOutput
                 $dumpbinExit = $LASTEXITCODE
                 if ($dumpbinExit -ne 0 -or -not ($dumpbinOutput | Select-String -Pattern "RSDS|PDB" -CaseSensitive:$false)) {
                     Write-Warning "FAIL: no CodeView/RSDS/PDB reference was found in the binary."
                     $pdbReferenceCheck = "failed"
                     Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=failed"
                     $buildExit = 1
+                } elseif (-not $embeddedPdbNames) {
+                    Write-Warning "FAIL: CodeView/RSDS was found, but no PDB file name was parsed from the binary."
+                    $pdbReferenceCheck = "failed"
+                    Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=failed"
+                    $buildExit = 1
                 } else {
                     Write-Host "OK: CodeView/RSDS/PDB reference found in binary."
+                    Write-Host "Embedded PDB name(s): $($embeddedPdbNames -join ', ')"
                     $pdbReferenceCheck = "passed"
                     Add-Content -Path $pdbCheckLog -Value "pdb_reference_check=passed"
+                    Add-Content -Path $pdbCheckLog -Value "embedded_pdb_names=$($embeddedPdbNames -join ',')"
                 }
             } else {
                 $pdbReferenceCheck = "not_required_release"
@@ -1315,6 +1379,7 @@ if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
         -ConfigName $artifactConfigName `
         -Executable $finalExecutable `
         -Pdb $finalPdb `
+        -EmbeddedPdbNames $embeddedPdbNames `
         -DependencyDirs @($vcpkgBin) `
         -ArtifactsRoot $artifactsRoot `
         -DependentsLog $dependentsLog `
@@ -1415,6 +1480,7 @@ if ($validationFailures) {
     "strict=$Strict",
     "xemu_exe=$(if ($finalExecutable) { $finalExecutable.FullName } else { 'not_found' })",
     "xemu_pdb=$(if ($finalPdb) { $finalPdb.FullName } else { 'not_found' })",
+    "embedded_pdb_names=$(if ($embeddedPdbNames) { $embeddedPdbNames -join ',' } else { 'not_found' })",
     "pdb_reference_check=$pdbReferenceCheck",
     "cv2pdb_check=$cv2pdbCheck",
     "runtime_smoke_check=$runtimeSmokeCheck",
