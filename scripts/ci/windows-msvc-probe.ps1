@@ -163,6 +163,30 @@ function Copy-ProbeArtifact {
     }
 }
 
+function Copy-VcpkgDiagnostics {
+    param(
+        [string]$VcpkgRoot,
+        [string]$LogsDir
+    )
+
+    $buildtrees = Join-Path $VcpkgRoot "buildtrees"
+    if (-not (Test-Path -LiteralPath $buildtrees)) {
+        return
+    }
+
+    $destination = Join-Path $LogsDir "vcpkg-buildtrees"
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $destination
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+
+    Get-ChildItem -Path $buildtrees -Recurse -File -Include "*.log", "*.txt" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($buildtrees.Length).TrimStart("\", "/")
+            $target = Join-Path $destination $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+        }
+}
+
 function Get-SafeFileName {
     param([string]$PathOrName)
 
@@ -957,9 +981,17 @@ if ($BuildScope -eq "full") {
 }
 $vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $vcpkgRoot "buildtrees\detect_compiler")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
 if ($script:LastCommandExitCode -ne 0) {
-    exit $script:LastCommandExitCode
+    Write-Warning "vcpkg install failed; collecting diagnostics and retrying once after clearing detect_compiler."
+    Copy-VcpkgDiagnostics -VcpkgRoot $vcpkgRoot -LogsDir $logsDir
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $vcpkgRoot "buildtrees\detect_compiler")
+    Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
+    if ($script:LastCommandExitCode -ne 0) {
+        Copy-VcpkgDiagnostics -VcpkgRoot $vcpkgRoot -LogsDir $logsDir
+        exit $script:LastCommandExitCode
+    }
 }
 End-Phase "vcpkg dependency install"
 
