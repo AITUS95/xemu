@@ -338,6 +338,14 @@ function Copy-MsvcPackage {
             Copy-Item -LiteralPath $Pdb.FullName -Destination (Join-Path $destination $name) -Force
             Add-Content -Path $LayoutLog -Value "packaged pdb: $name"
         }
+
+        foreach ($name in @("fetch-msvc-system-symbols.ps1", "fetch-msvc-system-symbols.cmd", "msvc-symbol-shell.cmd")) {
+            $scriptPath = Join-Path $script:RepoRoot "scripts\ci\$name"
+            if (Test-Path -LiteralPath $scriptPath) {
+                Copy-Item -LiteralPath $scriptPath -Destination (Join-Path $destination $name) -Force
+                Add-Content -Path $LayoutLog -Value "packaged symbol helper: $name"
+            }
+        }
     }
 
     Copy-RuntimeDllArtifacts `
