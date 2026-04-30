@@ -5,7 +5,8 @@ param(
         (Join-Path $env:WINDIR "System32\wdmaud.drv"),
         (Join-Path $env:WINDIR "System32\msacm32.drv")
     ),
-    [switch]$NoCopy
+    [switch]$NoCopy,
+    [switch]$InstallUserSymbolPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,7 +170,33 @@ foreach ($module in $Modules) {
 
 Write-Host ""
 Write-Host "Recommended symbol path:"
-Write-Host "$OutputDir;srv*$SymbolCache*https://msdl.microsoft.com/download/symbols"
+$recommendedSymbolPath = "$OutputDir;srv*$SymbolCache*https://msdl.microsoft.com/download/symbols"
+Write-Host $recommendedSymbolPath
+
+if ($InstallUserSymbolPath) {
+    $existingUserPath = [Environment]::GetEnvironmentVariable("_NT_SYMBOL_PATH", "User")
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($part in @($OutputDir, "srv*$SymbolCache*https://msdl.microsoft.com/download/symbols")) {
+        if ($part -and -not $parts.Contains($part)) {
+            $parts.Add($part)
+        }
+    }
+    if ($existingUserPath) {
+        foreach ($part in ($existingUserPath -split ";")) {
+            if ($part -and -not $parts.Contains($part)) {
+                $parts.Add($part)
+            }
+        }
+    }
+
+    $newUserPath = $parts -join ";"
+    [Environment]::SetEnvironmentVariable("_NT_SYMBOL_PATH", $newUserPath, "User")
+    $env:_NT_SYMBOL_PATH = $newUserPath
+    Write-Host ""
+    Write-Host "Installed user _NT_SYMBOL_PATH:"
+    Write-Host $newUserPath
+    Write-Host "Restart Visual Studio before reopening .diagsession reports."
+}
 
 if ($failures) {
     exit 1
