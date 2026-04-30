@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "SCRIPT_DIR=%~dp0"
+for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
 set "XEMU_SYMBOL_CACHE=%LOCALAPPDATA%\xemu\symbols"
 set "_NT_SYMBOL_PATH=%SCRIPT_DIR%;srv*%XEMU_SYMBOL_CACHE%*https://msdl.microsoft.com/download/symbols;%_NT_SYMBOL_PATH%"
 echo _NT_SYMBOL_PATH=%_NT_SYMBOL_PATH%
