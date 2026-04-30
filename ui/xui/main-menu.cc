@@ -59,7 +59,7 @@ void MainMenuGeneralView::Draw()
            "Check for updates whenever xemu is opened");
 #endif
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU)
     SectionTitle("Performance");
     Toggle("Hard FPU emulation", &g_config.perf.hard_fpu,
            "Use hardware-accelerated floating point emulation (requires restart)");

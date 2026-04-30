@@ -37,7 +37,7 @@
 
 static int g_use_hard_fpu;
 
-#if defined(XBOX) && defined(__x86_64__)
+#if defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU)
 #include "ui/xemu-settings.h"
 #define MAP_GEN_HELPER_SOFT_HARD(name) \
     (g_use_hard_fpu ? gen_helper_##name##__hard : gen_helper_##name##__soft)
@@ -121,7 +121,7 @@ static int g_use_hard_fpu;
 #define gen_helper_fldenv         MAP_GEN_HELPER_SOFT_HARD(fldenv)
 #define gen_helper_fsave          MAP_GEN_HELPER_SOFT_HARD(fsave)
 #define gen_helper_frstor         MAP_GEN_HELPER_SOFT_HARD(frstor)
-#endif /* defined(XBOX) && defined(__x86_64__) */
+#endif /* defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU) */
 
 #define HELPER_H "helper.h"
 #include "exec/helper-info.c.inc"
@@ -4259,8 +4259,10 @@ void tcg_x86_init(void)
     fpstt = tcg_global_mem_new_i32(tcg_env,
                                    offsetof(CPUX86State, fpstt), "fpstt");
 
-#if defined(XBOX) && defined(__x86_64__)
+#if defined(XBOX) && defined(__x86_64__) && defined(CONFIG_XEMU_HARD_FPU)
     g_use_hard_fpu = g_config.perf.hard_fpu;
+#else
+    g_use_hard_fpu = 0;
 #endif
 }
 

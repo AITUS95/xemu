@@ -888,6 +888,9 @@ if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
 $vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate")
+if ($BuildScope -eq "full") {
+    $vcpkgPackageNames += "vulkan-headers"
+}
 $vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
@@ -912,6 +915,8 @@ if (-not $pkgConfigDirs) {
 }
 
 $env:PATH = "$pkgconfBin;$vcpkgBin;$env:PATH"
+$env:INCLUDE = "$(Join-Path $vcpkgInstalled "include");$env:INCLUDE"
+$env:LIB = "$(Join-Path $vcpkgInstalled "lib");$env:LIB"
 $env:PKG_CONFIG = $pkgConfig
 $env:PKG_CONFIG_LIBDIR = $pkgConfigDirs -join ";"
 $env:PKG_CONFIG_PATH = $env:PKG_CONFIG_LIBDIR
@@ -988,8 +993,11 @@ $configureArgs = @(
 if ($BuildScope -eq "fast") {
     $configureArgs += @(
         "-Dsdl=disabled",
-        "-Dopengl=disabled"
+        "-Dopengl=disabled",
+        "-Dvulkan=disabled"
     )
+} elseif ($BuildScope -eq "full") {
+    $configureArgs += "-Dvulkan=enabled"
 }
 
 $configureLine = $configureArgs -join " "

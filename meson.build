@@ -2368,13 +2368,35 @@ if not get_option('libdw').auto() or \
                        required: get_option('libdw'))
 endif
 
+hard_fpu = false
+if host_arch == 'x86_64'
+  hard_fpu = cc.compiles('''
+    #include <float.h>
+    #if LDBL_MANT_DIG <= DBL_MANT_DIG
+    # error long double does not provide extended precision
+    #endif
+    int main(void) { return 0; }
+  ''', name: 'host long double has extended precision')
+endif
+
 vulkan = not_found
 libglslang = not_found
 
-if host_os == 'windows' and cc.has_header('vulkan/vk_platform.h')
-  vulkan = declare_dependency(compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'])
+if host_os == 'windows' and not get_option('vulkan').disabled()
+  vulkan_dep = dependency('vulkan', required: false)
+  if vulkan_dep.found()
+    vulkan = declare_dependency(
+      compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'],
+      dependencies: vulkan_dep)
+  elif cc.has_header('vulkan/vk_platform.h')
+    vulkan = declare_dependency(compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'])
+  elif get_option('vulkan').enabled()
+    error('Vulkan support requested, but vulkan/vk_platform.h was not found')
+  endif
 elif host_os == 'linux'
-  vulkan = dependency('vulkan')
+  vulkan = dependency('vulkan', required: get_option('vulkan'))
+elif get_option('vulkan').enabled()
+  error('Vulkan support requested, but this host OS is not supported')
 endif
 
 if vulkan.found()
@@ -2682,6 +2704,7 @@ if numa.found()
 endif
 config_host_data.set('CONFIG_OPENGL', opengl.found())
 config_host_data.set('CONFIG_VULKAN', vulkan.found())
+config_host_data.set('CONFIG_XEMU_HARD_FPU', hard_fpu)
 config_host_data.set('CONFIG_PLUGIN', get_option('plugins'))
 config_host_data.set('CONFIG_RBD', rbd.found())
 config_host_data.set('CONFIG_RDMA', rdma.found())
