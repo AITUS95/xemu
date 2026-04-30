@@ -81,8 +81,8 @@ void pgraph_vk_insert_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd,
 
     va_list args;
     va_start(args, format);
-    int err = vasprintf(&buf, format, args);
-    assert(err >= 0);
+    buf = g_strdup_vprintf(format, args);
+    assert(buf != NULL);
     va_end(args);
 
     VkDebugUtilsLabelEXT label_info = {
@@ -91,7 +91,7 @@ void pgraph_vk_insert_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd,
     };
     memcpy(label_info.color, color, 4 * sizeof(float));
     vkCmdInsertDebugUtilsLabelEXT(cmd, &label_info);
-    free(buf);
+    g_free(buf);
 }
 
 void pgraph_vk_begin_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd,
@@ -105,8 +105,8 @@ void pgraph_vk_begin_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd,
 
     va_list args;
     va_start(args, format);
-    int err = vasprintf(&buf, format, args);
-    assert(err >= 0);
+    buf = g_strdup_vprintf(format, args);
+    assert(buf != NULL);
     va_end(args);
 
     VkDebugUtilsLabelEXT label_info = {
@@ -115,7 +115,7 @@ void pgraph_vk_begin_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd,
     };
     memcpy(label_info.color, color, 4 * sizeof(float));
     vkCmdBeginDebugUtilsLabelEXT(cmd, &label_info);
-    free(buf);
+    g_free(buf);
 
     r->debug_depth += 1;
     assert(r->debug_depth < 10 && "Missing pgraph_vk_debug_marker_end?");
