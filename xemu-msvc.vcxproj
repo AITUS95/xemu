@@ -47,8 +47,8 @@
     <XemuArchitecture>amd64</XemuArchitecture>
     <XemuQemuCpu>x86_64</XemuQemuCpu>
     <XemuBuildScope>full</XemuBuildScope>
-    <MsvcProbeScript>$(ProjectDir)scripts\ci\windows-msvc-probe.ps1</MsvcProbeScript>
-    <MsvcProbeCommonArgs>-Architecture $(XemuArchitecture) -QemuCpu $(XemuQemuCpu) -BuildScope $(XemuBuildScope)</MsvcProbeCommonArgs>
+    <MsvcBuildScript>$(ProjectDir)build-msvc.ps1</MsvcBuildScript>
+    <MsvcBuildCommonArgs>-Architecture $(XemuArchitecture) -QemuCpu $(XemuQemuCpu) -BuildScope $(XemuBuildScope)</MsvcBuildCommonArgs>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <XemuBuildConfig>debug</XemuBuildConfig>
@@ -66,11 +66,10 @@
     <NMakeOutput>$(ProjectDir)msvc-artifacts\release\xemu.exe</NMakeOutput>
   </PropertyGroup>
   <PropertyGroup>
-    <MsvcProbeBuildCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" $(MsvcProbeCommonArgs) -BuildDir "$(XemuBuildDir)" -BuildConfig "$(XemuBuildConfig)"</MsvcProbeBuildCommand>
-    <MsvcProbeCleanConfigCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; @('$(XemuBuildDir)','msvc-artifacts\$(XemuBuildConfig)','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { $p = Join-Path '$(ProjectDir)' $_; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }"</MsvcProbeCleanConfigCommand>
-    <NMakeBuildCommandLine>$(MsvcProbeBuildCommand)</NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>$(MsvcProbeCleanConfigCommand) &amp;&amp; $(MsvcProbeBuildCommand)</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>$(MsvcProbeCleanConfigCommand)</NMakeCleanCommandLine>
+    <MsvcBuildCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" $(MsvcBuildCommonArgs) -Config "$(Configuration)"</MsvcBuildCommand>
+    <NMakeBuildCommandLine>$(MsvcBuildCommand)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" $(MsvcBuildCommonArgs) -Config "$(Configuration)" -Rebuild</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" -Config "$(Configuration)" -Clean</NMakeCleanCommandLine>
     <NMakePreprocessorDefinitions>WIN32;_WIN32;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_GNU_SOURCE;XBOX=1;CONFIG_WIN32=1;CONFIG_TCG=1;NOMINMAX;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <NMakeIncludeSearchPath>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)host\include;$(ProjectDir)host\include\x86_64;$(ProjectDir)build-msvc;$(ProjectDir)build-msvc\include;$(ProjectDir)build-msvc\qapi;$(ProjectDir)build-msvc-debug;$(ProjectDir)build-msvc-debug\include;$(ProjectDir)build-msvc-profile;$(ProjectDir)build-msvc-profile\include;$(ProjectDir)build-msvc-release;$(ProjectDir)build-msvc-release\include;$(ProjectDir)subprojects\libvhost-user;$(ProjectDir)subprojects\libvhost-user\include;$(ProjectDir)subprojects\libvduse;$(ProjectDir)subprojects\libvduse\include;$(ProjectDir)thirdparty;$(ProjectDir)thirdparty\nvapi;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
   </PropertyGroup>
@@ -80,6 +79,7 @@
     <None Include="tasks.vs.json" />
     <None Include="launch.vs.json" />
     <None Include="CppProperties.json" />
+    <None Include="build-msvc.ps1" />
     <None Include="scripts\ci\windows-msvc-probe.ps1" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

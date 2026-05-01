@@ -49,8 +49,108 @@ permissions:
   contents: read
 
 jobs:
+  deps:
+    name: MSVC dependencies (x64)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Clone tree
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .vcpkg-tool
+            .vcpkg-downloads
+            .vcpkg-binary-cache
+            subprojects\packagecache
+          key: msvc-vcpkg-${{ runner.os }}-x64-x64-windows-v2-${{ hashFiles('.github/workflows/windows-msvc.yml', 'scripts/ci/windows-msvc-probe.ps1', 'scripts/ci/msvc-cl-wrapper.py', 'meson.build', 'meson_options.txt', 'subprojects/*.wrap') }}
+          restore-keys: |
+            msvc-vcpkg-${{ runner.os }}-x64-x64-windows-v2-
+            msvc-vcpkg-${{ runner.os }}-
+
+      - name: Ensure standalone vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $vcpkgRoot = [System.IO.Path]::GetFullPath($env:VCPKG_ROOT)
+          if (-not $vcpkgRoot.StartsWith($workspace, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "VCPKG_ROOT must stay inside the GitHub workspace: $vcpkgRoot"
+          }
+
+          $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
+          if (-not (Test-Path -LiteralPath $vcpkgExe)) {
+            if (Test-Path -LiteralPath $vcpkgRoot) {
+              Remove-Item -LiteralPath $vcpkgRoot -Recurse -Force
+            }
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git $vcpkgRoot
+            & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+          }
+
+          & $vcpkgExe version
+
+      - name: Warm vcpkg dependencies
+        shell: pwsh
+        timeout-minutes: 60
+        run: |
+          .\scripts\ci\windows-msvc-probe.ps1 `
+            -Architecture "amd64" `
+            -QemuCpu "x86_64" `
+            -BuildScope "deps" `
+            -BuildConfig "release"
+
+      - name: Check dependency status
+        if: always()
+        shell: pwsh
+        run: |
+          $statusPath = "msvc-probe-logs\status.txt"
+          if (-not (Test-Path $statusPath)) {
+            Write-Error "MSVC dependency status file was not produced: $statusPath"
+            exit 1
+          }
+
+          $status = @{}
+          Get-Content $statusPath | ForEach-Object {
+            if ($_ -match "^([^=]+)=(.*)$") {
+              $status[$matches[1]] = $matches[2]
+            }
+          }
+
+          if ($status["build_exit_code"] -ne "0") {
+            Write-Error "MSVC dependency install failed: build_exit_code=$($status["build_exit_code"])"
+            exit 1
+          }
+
+          Write-Host "MSVC dependency install passed."
+
+      - name: Save vcpkg cache
+        if: success() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .vcpkg-tool
+            .vcpkg-downloads
+            .vcpkg-binary-cache
+            subprojects\packagecache
+          key: msvc-vcpkg-${{ runner.os }}-x64-x64-windows-v2-${{ hashFiles('.github/workflows/windows-msvc.yml', 'scripts/ci/windows-msvc-probe.ps1', 'scripts/ci/msvc-cl-wrapper.py', 'meson.build', 'meson_options.txt', 'subprojects/*.wrap') }}
+
+      - name: Upload MSVC dependency logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: logs-deps
+          path: xemu-msvc-logs
+          if-no-files-found: warn
+
   build:
     name: MSVC ${{ matrix.build_config }} (${{ matrix.arch }})
+    needs: deps
     runs-on: windows-2022
     timeout-minutes: 60
     strategy:
@@ -77,15 +177,17 @@ jobs:
           fetch-tags: true
 
       - name: Restore vcpkg binary cache
+        id: vcpkg-cache
         uses: actions/cache/restore@v5
         with:
           path: |
-            .vcpkg-binary-cache
+            .vcpkg-tool
             .vcpkg-downloads
+            .vcpkg-binary-cache
             subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: msvc-vcpkg-${{ runner.os }}-x64-x64-windows-v2-${{ hashFiles('.github/workflows/windows-msvc.yml', 'scripts/ci/windows-msvc-probe.ps1', 'scripts/ci/msvc-cl-wrapper.py', 'meson.build', 'meson_options.txt', 'subprojects/*.wrap') }}
           restore-keys: |
-            msvc-vcpkg-${{ runner.os }}-v1-
+            msvc-vcpkg-${{ runner.os }}-x64-x64-windows-v2-
             msvc-vcpkg-${{ runner.os }}-
 
       - name: Ensure standalone vcpkg
@@ -167,16 +269,6 @@ jobs:
           }
 
           Write-Host "MSVC ${{ matrix.build_config }} build status passed."
-
-      - name: Save vcpkg binary cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .vcpkg-binary-cache
-            .vcpkg-downloads
-            subprojects\packagecache
-          key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload MSVC logs
         if: always()

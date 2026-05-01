@@ -2,7 +2,7 @@ param(
     [string]$Architecture = "amd64",
     [string]$QemuCpu = "x86_64",
     [string]$BuildDir = "build-msvc",
-    [ValidateSet("fast", "core", "full")]
+    [ValidateSet("deps", "fast", "core", "full")]
     [string]$BuildScope = "fast",
     [ValidateSet("debug", "profile", "release", "all")]
     [string]$BuildConfig = "profile",
@@ -23,7 +23,15 @@ function Import-VisualStudioEnvironment {
 
     $installPath = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang `
         -property installationPath
+
+    if (-not $installPath) {
+        $installPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    }
+
     if (-not $installPath) {
         throw "Visual Studio C++ tools were not found. Install the MSVC x64/x86 build tools component and run this script again."
     }
@@ -97,6 +105,11 @@ function Find-Vcpkg {
 
     $candidates.Add("C:\vcpkg")
 
+    $vcpkgInstallationRoot = [Environment]::GetEnvironmentVariable("VCPKG_INSTALLATION_ROOT")
+    if ($vcpkgInstallationRoot) {
+        $candidates.Add($vcpkgInstallationRoot)
+    }
+
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         $vcpkg = if ((Split-Path $candidate -Leaf) -ieq "vcpkg.exe") {
             $candidate
@@ -118,7 +131,76 @@ function Find-Vcpkg {
         throw "Only the Visual Studio bundled vcpkg was found ($paths), but this build requires a standalone vcpkg checkout with classic mode. Set VCPKG_ROOT to a standalone vcpkg checkout, or put that vcpkg.exe earlier on PATH."
     }
 
-    throw "vcpkg.exe was not found. Set VCPKG_ROOT to a standalone vcpkg checkout, or put a standalone vcpkg.exe on PATH. The C:\vcpkg location is only a convenience fallback for common CI/runner images."
+    throw "vcpkg.exe was not found. Set VCPKG_ROOT to a standalone vcpkg checkout, or put a standalone vcpkg.exe on PATH. VCPKG_INSTALLATION_ROOT is accepted only when it points to a standalone vcpkg checkout. The C:\vcpkg location is only a convenience fallback for common CI/runner images."
+}
+
+function Get-DirectoryStats {
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{
+            Exists = $false
+            Files = 0
+            Bytes = 0
+        }
+    }
+
+    $files = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue
+    $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $bytes) {
+        $bytes = 0
+    }
+
+    return [pscustomobject]@{
+        Exists = $true
+        Files = @($files).Count
+        Bytes = [int64]$bytes
+    }
+}
+
+function Write-VcpkgCacheDiagnostics {
+    param(
+        [string]$Vcpkg,
+        [string]$VcpkgRoot,
+        [string]$Triplet,
+        [string]$LogsDir
+    )
+
+    $log = Join-Path $LogsDir "vcpkg-cache.log"
+    $paths = [ordered]@{
+        vcpkg_root = $VcpkgRoot
+        vcpkg_downloads = $env:VCPKG_DOWNLOADS
+        vcpkg_binary_cache = $env:VCPKG_DEFAULT_BINARY_CACHE
+        vcpkg_installed = (Join-Path $VcpkgRoot "installed\$Triplet")
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("vcpkg=$Vcpkg")
+    foreach ($entry in $paths.GetEnumerator()) {
+        $stats = Get-DirectoryStats -Path $entry.Value
+        $lines.Add("$($entry.Key)=$($entry.Value)")
+        $lines.Add("$($entry.Key)_exists=$($stats.Exists)")
+        $lines.Add("$($entry.Key)_files=$($stats.Files)")
+        $lines.Add("$($entry.Key)_bytes=$($stats.Bytes)")
+    }
+
+    $lines.Add("installed_packages_begin")
+    $listOutput = & $Vcpkg list 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in ($listOutput | Select-String -Pattern ":$Triplet" -SimpleMatch)) {
+            $lines.Add([string]$line)
+        }
+    } else {
+        $lines.Add("vcpkg_list_failed=$LASTEXITCODE")
+        foreach ($line in $listOutput) {
+            $lines.Add([string]$line)
+        }
+    }
+    $lines.Add("installed_packages_end")
+    $lines | Set-Content -Path $log
+
+    Write-Host "vcpkg cache diagnostics:"
+    Get-Content -Path $log
 }
 
 function Invoke-LoggedCommand {
@@ -1063,21 +1145,34 @@ Start-Phase "vcpkg dependency install"
 $vcpkg = Find-Vcpkg
 $vcpkgRoot = Split-Path $vcpkg -Parent
 $env:VCPKG_ROOT = $vcpkgRoot
+if (-not $env:VCPKG_DOWNLOADS) {
+    $env:VCPKG_DOWNLOADS = Join-Path $repoRoot ".vcpkg-downloads"
+}
+if (-not $env:VCPKG_DEFAULT_BINARY_CACHE) {
+    $env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path $repoRoot ".vcpkg-binary-cache"
+}
+if (-not $env:VCPKG_FEATURE_FLAGS) {
+    $env:VCPKG_FEATURE_FLAGS = "binarycaching"
+}
+New-Item -ItemType Directory -Force -Path $env:VCPKG_DOWNLOADS, $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
 Repair-VcpkgCmakeTools -VcpkgRoot $vcpkgRoot -LogsDir $logsDir
-if ($env:GITHUB_ACTIONS -and -not $env:VCPKG_BINARY_SOURCES) {
+if (-not $env:VCPKG_BINARY_SOURCES) {
     $binarySources = @("clear")
     if ($env:VCPKG_DEFAULT_BINARY_CACHE) {
-        New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
         $binarySources += "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
     }
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
 $vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate")
-if ($BuildScope -eq "full") {
+if ($BuildScope -in @("deps", "full")) {
     $vcpkgPackageNames += "vulkan-headers"
 }
 $vcpkgPackages = $vcpkgPackageNames | ForEach-Object { "${_}:$VcpkgTriplet" }
 $vcpkgArgs = @("install") + $vcpkgPackages + @("--clean-after-build")
+Write-Host "vcpkg packages: $($vcpkgPackages -join ', ')"
+Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
+Write-Host "VCPKG_DOWNLOADS: $env:VCPKG_DOWNLOADS"
+Write-Host "VCPKG_DEFAULT_BINARY_CACHE: $env:VCPKG_DEFAULT_BINARY_CACHE"
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $vcpkgRoot "buildtrees\detect_compiler")
 Invoke-LoggedCommand -FilePath $vcpkg -Arguments $vcpkgArgs
 if ($script:LastCommandExitCode -ne 0) {
@@ -1090,7 +1185,39 @@ if ($script:LastCommandExitCode -ne 0) {
         exit $script:LastCommandExitCode
     }
 }
+Write-VcpkgCacheDiagnostics -Vcpkg $vcpkg -VcpkgRoot $vcpkgRoot -Triplet $VcpkgTriplet -LogsDir $logsDir
 End-Phase "vcpkg dependency install"
+
+if ($BuildScope -eq "deps") {
+    @(
+        "configure_exit_code=0",
+        "build_exit_code=0",
+        "validation_exit_code=0",
+        "build_scope=$BuildScope",
+        "build_config=$BuildConfig",
+        "strict=$Strict",
+        "xemu_exe=not_run",
+        "xemu_pdb=not_run",
+        "embedded_pdb_names=not_run",
+        "pdb_reference_check=not_run",
+        "cv2pdb_check=not_run",
+        "runtime_smoke_check=not_run",
+        "runtime_version_smoke=not_run",
+        "runtime_real_validation=not_run",
+        "xemu_log_status=not_run",
+        "la_bb_end_status=not_run",
+        "missing_source_filename_check=not_run",
+        "packaged_artifact=not_run"
+    ) | Set-Content -Path (Join-Path $logsDir "status.txt")
+
+    Write-Host "Status summary:"
+    Get-Content -Path (Join-Path $logsDir "status.txt")
+    Write-Host "Phase timings:"
+    Get-Content -Path $script:PhaseLog
+    End-Phase "probe"
+    Publish-LogsArtifact -LogsDir $logsDir -LogsArtifactRoot $logsArtifactRoot
+    exit 0
+}
 
 $vcpkgInstalled = Join-Path $vcpkgRoot "installed\$VcpkgTriplet"
 $vcpkgBin = Join-Path $vcpkgInstalled "bin"

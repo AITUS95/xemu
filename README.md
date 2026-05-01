@@ -1,24 +1,26 @@
 # xemu MSVC branch
 
-This branch carries Windows/MSVC build integration for xemu. The normal
-QEMU/xemu Meson and Ninja build flow is preserved; Visual Studio is used as the
-Windows toolchain provider and, optionally, as a frontend for build, debug, and
-profiling workflows.
+This branch carries Windows/MSVC build integration for xemu while preserving the
+normal QEMU/xemu Meson and Ninja build flow. Visual Studio is used as the
+Windows toolchain provider and can also be used as a frontend for build, debug,
+and profiling workflows.
 
-The Windows build uses `clang-cl` with the MSVC ABI and MSVC linker/runtime. It
-is not intended to be a pure `cl.exe` port. Native PDB generation is handled by
-the MSVC-compatible toolchain and must not rely on `cv2pdb`.
+The supported Windows path uses `clang-cl` with the MSVC ABI, the MSVC linker,
+and the MSVC runtime. It is not a pure `cl.exe` port, and pure `cl.exe`
+compatibility is not promised unless it is explicitly tested. Native PDB files
+are produced by the MSVC-compatible toolchain; this branch must not rely on
+`cv2pdb`.
 
 For general project information, visit <https://xemu.app>.
 
-## Current MSVC Status
+## MSVC Status
 
 The MSVC workflow supports three x64 configurations:
 
-- `debug`: low optimization, debug-oriented build.
-- `profile`: optimized build intended for Visual Studio Performance Profiler,
-  GitHub Copilot Profiler, WPA, VTune, and similar tools.
-- `release`: optimized runtime build.
+- `Debug`: low optimization, debug-oriented build.
+- `Profile`: optimized build with native symbols for Visual Studio Performance
+  Profiler, GitHub Copilot Profiler, WPA, VTune, and similar tools.
+- `Release`: optimized runtime build.
 
 Artifacts are written under:
 
@@ -26,28 +28,38 @@ Artifacts are written under:
 - `msvc-artifacts/profile`
 - `msvc-artifacts/release`
 
-Build logs are written under `msvc-probe-logs` and packaged logs under
+Build logs are written under `msvc-probe-logs` and packaged CI-style logs under
 `xemu-msvc-logs`.
+
+Runtime validation that actually exercises emulation requires user-provided
+BIOS, ROM, disk images, or test payloads. Those assets are not included in this
+repository. A successful build proves configure, compile, link, packaging, and
+PDB generation; full runtime validation is a separate manual step.
 
 ## Prerequisites
 
-Install these tools before building on Windows:
+Install these manually before building on Windows:
 
-- Visual Studio 2022 or Build Tools for Visual Studio with C++ x64 tools.
+- Visual Studio 2022 or Build Tools for Visual Studio with the C++ x64 tools.
 - C++ Clang tools for Windows, providing `clang-cl.exe`.
 - Windows SDK, providing `rc.exe` and `midl.exe`.
-- MSVC linker, providing `link.exe`.
-- Git for Windows, providing `bash.exe` and `sh.exe`.
+- Git for Windows, providing `git.exe`, `bash.exe`, and `sh.exe`.
 - Python 3 available as `python.exe`.
-- vcpkg available through one of:
-  - `VCPKG_ROOT`
-  - `vcpkg.exe` on `PATH`
-  - `C:\vcpkg` as a convenience fallback for common CI images.
-  - Use a standalone vcpkg checkout. The vcpkg copy bundled inside Visual
-    Studio is ignored because it may not support classic mode installs.
 
-The build script installs or updates Meson and Ninja through Python/pip when it
-runs. You can preinstall them, but the scripted path is the supported one.
+The local wrapper can prepare these inside the repository:
+
+- `.venv-msvc` with Meson and Ninja.
+- `.vcpkg-tool` as a standalone vcpkg checkout when no standalone vcpkg is
+  already available.
+- `.vcpkg-downloads` for vcpkg downloads.
+- `.vcpkg-binary-cache` for vcpkg binary packages.
+- vcpkg packages needed by the build: `pkgconf`, `glib`, `pixman`, `libepoxy`,
+  `libsamplerate`, and `vulkan-headers`.
+
+The vcpkg copy bundled inside Visual Studio is not used because it may not
+support classic mode installs. Use a standalone vcpkg checkout through
+`VCPKG_ROOT`, `VCPKG_INSTALLATION_ROOT`, `vcpkg.exe` on `PATH`, or let
+`build-msvc.ps1` bootstrap `.vcpkg-tool`.
 
 ## Clone
 
@@ -57,20 +69,75 @@ cd xemu
 git submodule update --init --recursive
 ```
 
-If vcpkg is not on `PATH`, set one of the supported environment variables:
+## Simple Local Build
+
+From the repository root:
 
 ```powershell
-$env:VCPKG_ROOT = "<path-to-vcpkg>"
+.\build-msvc.ps1
 ```
 
-Do not hardcode this value in the repository. Keep it in your shell, user
-environment, or CI configuration.
+The default builds `Release`. To choose a configuration:
 
-## Build From PowerShell
+```powershell
+.\build-msvc.ps1 -Config Debug
+.\build-msvc.ps1 -Config Profile
+.\build-msvc.ps1 -Config Release
+.\build-msvc.ps1 -Config All
+```
 
-Run PowerShell from the repository root.
+The wrapper prepares local Python tools and standalone vcpkg when possible, then
+delegates to `scripts\ci\windows-msvc-probe.ps1`. It does not create a second
+build system.
 
-Build one configuration:
+Useful local commands:
+
+```powershell
+.\build-msvc.ps1 -CheckOnly
+.\build-msvc.ps1 -BootstrapVcpkg -CheckOnly
+.\build-msvc.ps1 -Config Release -Rebuild
+.\build-msvc.ps1 -Clean
+.\build-msvc.ps1 -Config Release -CleanIntermediates
+.\build-msvc.ps1 -Config Release -CleanAll
+.\build-msvc.ps1 -Config Release -KeepBuildTree
+```
+
+`-CheckOnly` verifies and prepares the local wrapper environment without
+configuring or compiling xemu. `-Rebuild` removes the selected configuration's
+generated outputs before building. `-Clean` removes generated build, artifact,
+and log outputs and exits.
+
+## Cleanup
+
+Final runnable packages live in `msvc-artifacts/<config>`.
+
+Generated build trees and logs are intermediate data:
+
+- `build-msvc`
+- `build-msvc-debug`
+- `build-msvc-profile`
+- `build-msvc-release`
+- `msvc-probe-logs`
+- `xemu-msvc-logs`
+
+Reusable caches speed up future builds:
+
+- `.venv-msvc`
+- `.vcpkg-tool`
+- `.vcpkg-downloads`
+- `.vcpkg-binary-cache`
+
+After a successful build, `-CleanIntermediates` removes build trees and logs but
+keeps `msvc-artifacts/<config>`. `-CleanAll` also removes reusable local caches,
+which saves disk space but makes the next build slower. `-KeepBuildTree` keeps
+the build tree for debugging even when cleanup switches are present.
+
+Cleanup never removes source files, tracked configuration files, Visual Studio
+JSON files, or runtime assets supplied by the user.
+
+## Advanced Build Script
+
+The lower-level CI/probe script remains available for diagnostics:
 
 ```powershell
 .\scripts\ci\windows-msvc-probe.ps1 `
@@ -81,37 +148,20 @@ Build one configuration:
   -BuildConfig profile
 ```
 
-Build all three configurations:
+The accepted build scopes are:
 
-```powershell
-foreach ($config in @("debug", "profile", "release")) {
-  .\scripts\ci\windows-msvc-probe.ps1 `
-    -Architecture amd64 `
-    -QemuCpu x86_64 `
-    -BuildDir "build-msvc-$config" `
-    -BuildScope full `
-    -BuildConfig $config
-}
-```
+- `deps`: install vcpkg dependencies and write dependency/cache diagnostics.
+- `fast`: configure and compile the smallest useful probe target.
+- `core`: compile a broader core target.
+- `full`: build and package the emulator artifact.
 
-Use `-Strict` when you want CI-style validation to fail on missing required
-build outputs or invalid PDB state:
+Use `-Strict` when CI-style validation should fail the script on missing required
+build outputs, invalid PDB state, or strict runtime-validation failures.
 
-```powershell
-.\scripts\ci\windows-msvc-probe.ps1 `
-  -Architecture amd64 `
-  -QemuCpu x86_64 `
-  -BuildDir build-msvc-profile `
-  -BuildScope full `
-  -BuildConfig profile `
-  -Strict
-```
-
-## Build From Visual Studio Project
+## Visual Studio Project
 
 Open `xemu-msvc.vcxproj` directly in Visual Studio. It is a Makefile/NMake
-wrapper project. It does not replace Meson or Ninja; it delegates Build, Rebuild,
-and Clean to `scripts\ci\windows-msvc-probe.ps1`.
+wrapper project; Meson and Ninja remain the real build system.
 
 Select one of:
 
@@ -119,67 +169,47 @@ Select one of:
 - `Profile|x64`
 - `Release|x64`
 
-Then use the normal Visual Studio Build, Rebuild, or Clean commands. The project
-uses relative paths only and writes artifacts under `msvc-artifacts/<config>`.
+Then use the normal Build, Rebuild, or Clean commands. Visual Studio calls
+`build-msvc.ps1`, so a first build after a clean clone can prepare the local
+Python tools and standalone vcpkg automatically. Artifacts are written under
+`msvc-artifacts/<config>`.
 
 ## Visual Studio Open Folder
 
 You can also use `File > Open > Folder` and select the cloned repository root.
 The repository includes portable Open Folder configuration:
 
-- `tasks.vs.json`: build, rebuild, and clean tasks that call the same MSVC probe
-  script used by the `.vcxproj`.
-- `launch.vs.json`: launch targets for the generated Debug, Profile, and Release
-  artifacts. Arguments are intentionally empty because BIOS, ROM, HDD images, and
-  other runtime assets are user-provided and are not redistributable.
-- `CppProperties.json`: IntelliSense configuration for MSVC x64/clang-cl style
-  parsing. Some generated include directories will not exist before the first
-  build; Visual Studio may show transient IntelliSense errors until configure
-  has generated them.
+- `tasks.vs.json`: build, rebuild, clean, environment check, and vcpkg bootstrap
+  tasks that call `build-msvc.ps1`.
+- `launch.vs.json`: launch targets for `msvc-artifacts/debug/xemu.exe`,
+  `msvc-artifacts/profile/xemu.exe`, and `msvc-artifacts/release/xemu.exe`.
+  Arguments are empty because runtime assets are user-provided.
+- `CppProperties.json`: IntelliSense configuration for MSVC x64 and clang-cl
+  parsing. Some generated include directories do not exist before the first
+  configure, so transient IntelliSense errors before the first build are normal.
 
 For profiling, build `xemu MSVC Profile`, then launch or profile the `xemu MSVC
-Profile` target. This target points to `msvc-artifacts/profile/xemu.exe`.
+Profile` target. It points to `msvc-artifacts/profile/xemu.exe`.
 
-## Clean and Rebuild
+## GitHub Actions
 
-From Visual Studio, use Clean or Rebuild on the active `.vcxproj` configuration,
-or run the Open Folder task `xemu MSVC Clean`.
+The Windows MSVC workflow has one dependency warm-up job and parallel
+Debug/Profile/Release build jobs. The dependency job warms the standalone vcpkg
+tool, downloads, binary cache, and package cache with a stable cache key based on
+the files that actually affect dependencies. The build jobs restore that cache
+and then run in parallel.
 
-From PowerShell:
-
-```powershell
-$paths = @(
-  "build-msvc",
-  "build-msvc-debug",
-  "build-msvc-profile",
-  "build-msvc-release",
-  "msvc-artifacts",
-  "msvc-probe-logs",
-  "xemu-msvc-logs"
-)
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $paths
-```
-
-The clean commands only target generated MSVC build, artifact, and log
-directories.
-
-## vcpkg
-
-The build script installs these dependencies through vcpkg as needed:
-
-- `pkgconf`
-- `glib`
-- `pixman`
-- `libepoxy`
-- `libsamplerate`
-- `vulkan-headers` for full builds
-
-The script looks for vcpkg using `VCPKG_ROOT`, `vcpkg.exe` on `PATH`, then the
-CI-friendly fallback `C:\vcpkg`. Prefer `VCPKG_ROOT` for local machines. The
-Visual Studio bundled vcpkg is ignored because it may not support the classic
-mode installs used by this branch.
+A first cold run can still spend significant time populating vcpkg. Later runs
+should spend much less time in `vcpkg dependency install`. Inspect
+`msvc-probe-logs/phase-timings.log` and `msvc-probe-logs/vcpkg-cache.log` in the
+`logs` artifact to verify cache behavior.
 
 ## Troubleshooting
+
+`Visual Studio C++ tools were not found`
+
+Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ x64
+toolchain.
 
 `clang-cl.exe was not found`
 
@@ -187,12 +217,12 @@ Install the C++ Clang tools for Windows component in Visual Studio.
 
 `cl.exe was not found`
 
-Install the MSVC C++ build tools. The script imports `vcvarsall.bat`
-automatically, so you do not need to start from a Developer Command Prompt.
+Install the MSVC C++ build tools. The scripts import the Visual Studio build
+environment automatically.
 
 `link.exe` resolves to Git for Windows
 
-Git also ships a `link.exe` under `usr\bin`. The script imports the Visual Studio
+Git also ships a `link.exe` under `usr\bin`. The probe imports the Visual Studio
 environment first and fails if the Git linker shim is first on `PATH`.
 
 `rc.exe` or `midl.exe was not found`
@@ -201,52 +231,62 @@ Install a Windows SDK through Visual Studio Installer.
 
 `bash.exe` or `sh.exe was not found`
 
-Install Git for Windows and ensure its command-line tools are available.
+Install Git for Windows and ensure command-line tools are available.
 
 `python.exe was not found`
 
-Install Python 3 and enable the PATH option, or run the script from a shell where
+Install Python 3 and enable the PATH option, or run from a shell where
 `python.exe` is already available.
 
 Meson or Ninja errors
 
-The script installs Meson and Ninja through `python -m pip`. Check
-`msvc-probe-logs/meson-version.log`, `ninja-version.log`, `configure-output.log`,
-and `build-output.log`.
+Use `build-msvc.ps1`; it creates `.venv-msvc` and installs Meson/Ninja there.
+Then inspect `msvc-probe-logs/meson-version.log`, `ninja-version.log`,
+`configure-output.log`, and `build-output.log`.
 
 `vcpkg.exe was not found`
 
-Set `VCPKG_ROOT`, or put a standalone `vcpkg.exe` on `PATH`. The Visual Studio
-bundled vcpkg can report that it has no classic mode instance and is not used by
-this build.
+Run `.\build-msvc.ps1 -BootstrapVcpkg -CheckOnly`, set `VCPKG_ROOT` to a
+standalone vcpkg checkout, or put a standalone `vcpkg.exe` on `PATH`.
+
+Visual Studio bundled vcpkg is rejected
+
+Use a standalone vcpkg checkout. The bundled Visual Studio vcpkg can report that
+it has no classic mode instance.
 
 Paths with spaces
 
-The script and Visual Studio files quote repository paths. If a third-party tool
-fails on a path with spaces, retry from a shorter clone path and report the
-failing command from `msvc-probe-logs`.
+The scripts quote repository paths. If a third-party tool fails on a path with
+spaces, retry from a shorter clone path and report the failing command from
+`msvc-probe-logs`.
 
 Missing PDB files
 
-Debug and Profile builds are expected to produce native PDB files beside or
-packaged with the final executable. Check `msvc-artifacts/<config>` and
-`msvc-probe-logs/status.txt`.
+Debug and Profile builds are expected to package native PDB files. Check
+`msvc-artifacts/<config>` and `msvc-probe-logs/status.txt`. Release artifacts may
+not package a final xemu PDB unless the release validation mode requires it.
 
 Missing DLLs
 
 The packaging step copies known runtime DLLs from vcpkg when the final
 executable is found. If runtime launch fails, check `msvc-artifacts/<config>` and
-the package log under `xemu-msvc-logs`.
+`msvc-probe-logs/artifact-layout.log`.
 
 Artifacts not generated
 
 Check `configure_exit_code`, `build_exit_code`, and `packaged_artifact` in
-`msvc-probe-logs/status.txt`, then inspect `build-output.log`.
+`msvc-probe-logs/status.txt`, then inspect `configure-output.log` and
+`build-output.log`.
 
 Visual Studio IntelliSense errors before the first build
 
 Generated Meson headers do not exist until configure has completed. Run a Debug,
 Profile, or Release build once, then reload IntelliSense if needed.
+
+Workflow is slow on a cold cache
+
+Check `phase-timings.log` and `vcpkg-cache.log`. The first run may populate
+vcpkg downloads and binary packages; later runs should restore the stable cache.
 
 ## Known Limitations
 

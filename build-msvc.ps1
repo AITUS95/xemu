@@ -1,0 +1,373 @@
+[CmdletBinding()]
+param(
+    [ValidateSet("Debug", "Profile", "Release", "All", "debug", "profile", "release", "all")]
+    [string]$Config = "Release",
+    [ValidateSet("fast", "core", "full")]
+    [string]$BuildScope = "full",
+    [string]$Architecture = "amd64",
+    [string]$QemuCpu = "x86_64",
+    [string]$VcpkgTriplet = "x64-windows",
+    [string]$ExtraConfigureArgs = "",
+    [switch]$Clean,
+    [switch]$Rebuild,
+    [switch]$CheckOnly,
+    [switch]$BootstrapVcpkg,
+    [switch]$CleanIntermediates,
+    [switch]$CleanAll,
+    [switch]$KeepBuildTree
+)
+
+$ErrorActionPreference = "Stop"
+
+$RepoRoot = $PSScriptRoot
+$LocalVenv = Join-Path $RepoRoot ".venv-msvc"
+$LocalVcpkgRoot = Join-Path $RepoRoot ".vcpkg-tool"
+$LocalVcpkgDownloads = Join-Path $RepoRoot ".vcpkg-downloads"
+$LocalVcpkgBinaryCache = Join-Path $RepoRoot ".vcpkg-binary-cache"
+
+function Write-Step {
+    param([string]$Message)
+    $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$now] $Message"
+}
+
+function Get-PowerShellHostPath {
+    $path = (Get-Process -Id $PID).Path
+    if ($path -and (Test-Path -LiteralPath $path)) {
+        return $path
+    }
+    return (Join-Path $PSHOME "powershell.exe")
+}
+
+function Get-ConfigName {
+    param([string]$Name)
+    return $Name.ToLowerInvariant()
+}
+
+function Assert-InRepoPath {
+    param([string]$Path)
+    $fullRoot = [System.IO.Path]::GetFullPath($RepoRoot)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $fullPath.StartsWith($fullRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to modify a path outside the repository: $fullPath"
+    }
+    return $fullPath
+}
+
+function Import-VisualStudioEnvironment {
+    param([string]$Arch)
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere)) {
+        throw "vswhere.exe was not found. Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ workload."
+    }
+
+    $installPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang `
+        -property installationPath
+
+    if (-not $installPath) {
+        $installPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    }
+
+    if (-not $installPath) {
+        throw "Visual Studio C++ tools were not found. Install the MSVC x64/x86 build tools component."
+    }
+
+    $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"
+    if (-not (Test-Path -LiteralPath $vcvars)) {
+        throw "vcvarsall.bat was not found at $vcvars. Repair the Visual Studio C++ toolchain installation."
+    }
+
+    $environment = & cmd.exe /s /c "`"$vcvars`" $Arch >nul && set"
+    foreach ($line in $environment) {
+        if ($line -match "^([^=]+)=(.*)$") {
+            Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+        }
+    }
+}
+
+function Assert-Tool {
+    param(
+        [string]$Name,
+        [string]$Hint
+    )
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) {
+        throw "$Name was not found on PATH. $Hint"
+    }
+    Write-Host "$Name`: $($command.Source)"
+    return $command.Source
+}
+
+function Test-MsvcToolchain {
+    Write-Step "Checking Visual Studio/MSVC toolchain"
+    Import-VisualStudioEnvironment -Arch $Architecture
+    Assert-Tool -Name "cl.exe" -Hint "Install the MSVC compiler tools." | Out-Null
+    Assert-Tool -Name "clang-cl.exe" -Hint "Install the C++ Clang tools for Windows component in Visual Studio." | Out-Null
+    $link = Assert-Tool -Name "link.exe" -Hint "Install the MSVC linker component."
+    if ($link -match "\\Git\\usr\\bin\\link\.exe$") {
+        throw "Git for Windows link.exe is first on PATH. The MSVC linker must appear first."
+    }
+    Assert-Tool -Name "rc.exe" -Hint "Install a Windows SDK with resource compiler tools." | Out-Null
+    Assert-Tool -Name "midl.exe" -Hint "Install a Windows SDK with MIDL tools." | Out-Null
+    Assert-Tool -Name "bash.exe" -Hint "Install Git for Windows." | Out-Null
+    Assert-Tool -Name "sh.exe" -Hint "Install Git for Windows." | Out-Null
+}
+
+function Remove-RepoPath {
+    param([string]$RelativePath)
+    $target = Assert-InRepoPath (Join-Path $RepoRoot $RelativePath)
+    if (Test-Path -LiteralPath $target) {
+        Write-Host "Removing $RelativePath"
+        Remove-Item -LiteralPath $target -Recurse -Force
+    }
+}
+
+function Get-OutputPaths {
+    param([string]$ConfigName)
+    if ($ConfigName -eq "all") {
+        return @(
+            "build-msvc",
+            "build-msvc-debug",
+            "build-msvc-profile",
+            "build-msvc-release",
+            "msvc-artifacts",
+            "msvc-probe-logs",
+            "xemu-msvc-logs"
+        )
+    }
+
+    return @(
+        "build-msvc-$ConfigName",
+        "msvc-artifacts\$ConfigName",
+        "msvc-probe-logs",
+        "xemu-msvc-logs"
+    )
+}
+
+function Clear-MsvcOutputs {
+    param(
+        [string]$ConfigName,
+        [switch]$IncludeArtifacts,
+        [switch]$IncludeReusableCaches,
+        [switch]$KeepBuildTree
+    )
+
+    $paths = Get-OutputPaths -ConfigName $ConfigName
+    foreach ($relative in $paths) {
+        if ($KeepBuildTree -and $relative -like "build-msvc*") {
+            Write-Host "Keeping $relative"
+            continue
+        }
+        if (-not $IncludeArtifacts -and $relative -like "msvc-artifacts*") {
+            Write-Host "Keeping $relative"
+            continue
+        }
+        Remove-RepoPath -RelativePath $relative
+    }
+
+    if ($IncludeReusableCaches) {
+        foreach ($relative in @(".vcpkg-tool", ".vcpkg-downloads", ".vcpkg-binary-cache", ".venv-msvc")) {
+            Remove-RepoPath -RelativePath $relative
+        }
+    }
+}
+
+function Test-VisualStudioVcpkg {
+    param([string]$Path)
+    if (-not $Path) {
+        return $false
+    }
+    return ([System.IO.Path]::GetFullPath($Path) -match "\\Microsoft Visual Studio\\.*\\VC\\vcpkg\\vcpkg\.exe$")
+}
+
+function Find-StandaloneVcpkg {
+    $roots = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in @("VCPKG_ROOT", "VCPKG_INSTALLATION_ROOT")) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) {
+            $roots.Add($value)
+        }
+    }
+
+    foreach ($command in Get-Command vcpkg.exe -ErrorAction SilentlyContinue) {
+        if ($command.Source) {
+            $roots.Add((Split-Path $command.Source -Parent))
+        }
+    }
+
+    $roots.Add("C:\vcpkg")
+
+    foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+        $vcpkg = if ((Split-Path $root -Leaf) -ieq "vcpkg.exe") {
+            $root
+        } else {
+            Join-Path $root "vcpkg.exe"
+        }
+        if ((Test-Path -LiteralPath $vcpkg) -and -not (Test-VisualStudioVcpkg -Path $vcpkg)) {
+            return (Resolve-Path $vcpkg).Path
+        }
+    }
+
+    return $null
+}
+
+function Ensure-PythonTools {
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $python) {
+        throw "python.exe was not found. Install Python 3 and enable the PATH option, then rerun build-msvc.ps1."
+    }
+
+    $venvPython = Join-Path $LocalVenv "Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        Write-Step "Creating local Python environment: .venv-msvc"
+        & $python.Source -m venv $LocalVenv
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create .venv-msvc with Python."
+        }
+    }
+
+    Write-Step "Installing Meson and Ninja in .venv-msvc"
+    & $venvPython -m pip install --upgrade pip meson ninja
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install Meson/Ninja in .venv-msvc."
+    }
+
+    $venvScripts = Join-Path $LocalVenv "Scripts"
+    $env:PATH = "$venvScripts;$env:PATH"
+    return $venvPython
+}
+
+function Ensure-Vcpkg {
+    $vcpkg = Find-StandaloneVcpkg
+    if ($BootstrapVcpkg -or -not $vcpkg) {
+        $vcpkg = Join-Path $LocalVcpkgRoot "vcpkg.exe"
+        if (-not (Test-Path -LiteralPath $vcpkg)) {
+            $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $git) {
+                throw "git.exe was not found. Install Git for Windows, then rerun build-msvc.ps1."
+            }
+
+            if (Test-Path -LiteralPath $LocalVcpkgRoot) {
+                Remove-Item -LiteralPath $LocalVcpkgRoot -Recurse -Force
+            }
+
+            Write-Step "Bootstrapping standalone vcpkg in .vcpkg-tool"
+            & $git.Source clone --depth 1 https://github.com/microsoft/vcpkg.git $LocalVcpkgRoot
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to clone vcpkg into .vcpkg-tool."
+            }
+            & (Join-Path $LocalVcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to bootstrap vcpkg."
+            }
+        }
+    }
+
+    $vcpkgRoot = Split-Path $vcpkg -Parent
+    $env:VCPKG_ROOT = $vcpkgRoot
+    if (-not $env:VCPKG_DOWNLOADS) {
+        $env:VCPKG_DOWNLOADS = $LocalVcpkgDownloads
+    }
+    if (-not $env:VCPKG_DEFAULT_BINARY_CACHE) {
+        $env:VCPKG_DEFAULT_BINARY_CACHE = $LocalVcpkgBinaryCache
+    }
+    if (-not $env:VCPKG_FEATURE_FLAGS) {
+        $env:VCPKG_FEATURE_FLAGS = "binarycaching"
+    }
+    if (-not $env:VCPKG_BINARY_SOURCES) {
+        $env:VCPKG_BINARY_SOURCES = "clear;files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+    }
+
+    New-Item -ItemType Directory -Force -Path $env:VCPKG_DOWNLOADS, $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+    return $vcpkg
+}
+
+function Invoke-MsvcProbe {
+    param([string]$ConfigName)
+
+    $probe = Join-Path $RepoRoot "scripts\ci\windows-msvc-probe.ps1"
+    $hostPath = Get-PowerShellHostPath
+    $buildDir = if ($ConfigName -eq "all") { "build-msvc" } else { "build-msvc-$ConfigName" }
+    $args = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $probe,
+        "-Architecture", $Architecture,
+        "-QemuCpu", $QemuCpu,
+        "-BuildDir", $buildDir,
+        "-BuildScope", $BuildScope,
+        "-BuildConfig", $ConfigName,
+        "-VcpkgTriplet", $VcpkgTriplet
+    )
+    if ($ExtraConfigureArgs) {
+        $args += @("-ExtraConfigureArgs", $ExtraConfigureArgs)
+    }
+
+    Write-Step "Starting MSVC $ConfigName build"
+    & $hostPath @args
+    return $LASTEXITCODE
+}
+
+$configName = Get-ConfigName -Name $Config
+if ($Clean -and -not $PSBoundParameters.ContainsKey("Config")) {
+    $configName = "all"
+}
+
+try {
+    if ($Clean) {
+        Clear-MsvcOutputs -ConfigName $configName -IncludeArtifacts -IncludeReusableCaches:$CleanAll -KeepBuildTree:$KeepBuildTree
+        if (-not $Rebuild) {
+            Write-Step "Clean completed"
+            exit 0
+        }
+    }
+
+    if ($Rebuild) {
+        Clear-MsvcOutputs -ConfigName $configName -IncludeArtifacts -IncludeReusableCaches:$false -KeepBuildTree:$false
+    }
+
+    Test-MsvcToolchain
+    Ensure-PythonTools | Out-Null
+    $vcpkg = Ensure-Vcpkg
+
+    Write-Host "MSVC local build environment"
+    Write-Host "Repository:              $RepoRoot"
+    Write-Host "Config:                  $configName"
+    Write-Host "Scope:                   $BuildScope"
+    Write-Host "VCPKG_ROOT:              $env:VCPKG_ROOT"
+    Write-Host "VCPKG_DOWNLOADS:         $env:VCPKG_DOWNLOADS"
+    Write-Host "VCPKG_DEFAULT_BINARY_CACHE: $env:VCPKG_DEFAULT_BINARY_CACHE"
+    Write-Host "vcpkg.exe:               $vcpkg"
+
+    if ($CheckOnly) {
+        Write-Step "CheckOnly completed"
+        exit 0
+    }
+
+    $exitCode = Invoke-MsvcProbe -ConfigName $configName
+    if ($exitCode -ne 0) {
+        throw "MSVC build failed with exit code $exitCode. Check msvc-probe-logs and xemu-msvc-logs."
+    }
+
+    if ($CleanIntermediates -or $CleanAll) {
+        Clear-MsvcOutputs -ConfigName $configName -IncludeArtifacts:$false -IncludeReusableCaches:$CleanAll -KeepBuildTree:$KeepBuildTree
+    }
+
+    if ($configName -eq "all") {
+        Write-Step "MSVC build completed. Artifacts are under msvc-artifacts\\debug, msvc-artifacts\\profile, and msvc-artifacts\\release."
+    } else {
+        $artifactExe = Join-Path $RepoRoot "msvc-artifacts\$configName\xemu.exe"
+        Write-Step "MSVC build completed. Expected executable: $artifactExe"
+    }
+    exit 0
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}

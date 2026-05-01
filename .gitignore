@@ -5,6 +5,7 @@
 /build-msvc-profile/
 /build-msvc-release/
 /.cache/
+/.venv-msvc/
 /.vcpkg-binary-cache/
 /.vcpkg-downloads/
 /.vcpkg-tool/
@@ -33,7 +34,7 @@ GTAGS
 
 build.log
 /dist
-/msvc-native-artifacts/
+/msvc-artifacts/
 /msvc-probe-logs/
 /subprojects/packagecache/
 /xemu-msvc-logs/

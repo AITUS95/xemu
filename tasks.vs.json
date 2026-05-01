@@ -14,17 +14,9 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
-        "-Architecture",
-        "amd64",
-        "-QemuCpu",
-        "x86_64",
-        "-BuildDir",
-        "build-msvc-debug",
-        "-BuildScope",
-        "full",
-        "-BuildConfig",
-        "debug"
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug"
       ]
     },
     {
@@ -40,17 +32,9 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
-        "-Architecture",
-        "amd64",
-        "-QemuCpu",
-        "x86_64",
-        "-BuildDir",
-        "build-msvc-profile",
-        "-BuildScope",
-        "full",
-        "-BuildConfig",
-        "profile"
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile"
       ]
     },
     {
@@ -66,17 +50,27 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceRoot}\\scripts\\ci\\windows-msvc-probe.ps1",
-        "-Architecture",
-        "amd64",
-        "-QemuCpu",
-        "x86_64",
-        "-BuildDir",
-        "build-msvc-release",
-        "-BuildScope",
-        "full",
-        "-BuildConfig",
-        "release"
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC All",
+      "taskName": "xemu MSVC All",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "All"
       ]
     },
     {
@@ -91,8 +85,11 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$ErrorActionPreference='Stop'; @('build-msvc-debug','msvc-artifacts\\debug','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-debug -BuildScope full -BuildConfig debug"
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug",
+        "-Rebuild"
       ]
     },
     {
@@ -107,8 +104,11 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$ErrorActionPreference='Stop'; @('build-msvc-profile','msvc-artifacts\\profile','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-profile -BuildScope full -BuildConfig profile"
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile",
+        "-Rebuild"
       ]
     },
     {
@@ -123,8 +123,11 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$ErrorActionPreference='Stop'; @('build-msvc-release','msvc-artifacts\\release','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-release -BuildScope full -BuildConfig release"
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release",
+        "-Rebuild"
       ]
     },
     {
@@ -139,8 +142,46 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$ErrorActionPreference='Stop'; @('build-msvc','build-msvc-debug','build-msvc-profile','build-msvc-release','msvc-artifacts','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }"
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "All",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Check Environment",
+      "taskName": "xemu MSVC Check Environment",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "custom",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-CheckOnly"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Bootstrap vcpkg",
+      "taskName": "xemu MSVC Bootstrap vcpkg",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "custom",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-CheckOnly",
+        "-BootstrapVcpkg"
       ]
     }
   ]
