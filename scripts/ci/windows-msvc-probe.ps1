@@ -83,11 +83,9 @@ function ConvertTo-WindowsSlashPath {
 function Find-Vcpkg {
     $candidates = [System.Collections.Generic.List[string]]::new()
 
-    foreach ($name in @("VCPKG_ROOT", "VCPKG_INSTALLATION_ROOT")) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if ($value) {
-            $candidates.Add($value)
-        }
+    $vcpkgRoot = [Environment]::GetEnvironmentVariable("VCPKG_ROOT")
+    if ($vcpkgRoot) {
+        $candidates.Add($vcpkgRoot)
     }
 
     foreach ($command in Get-Command vcpkg.exe -ErrorAction SilentlyContinue) {
@@ -97,6 +95,11 @@ function Find-Vcpkg {
     }
 
     $candidates.Add("C:\vcpkg")
+
+    $vcpkgInstallationRoot = [Environment]::GetEnvironmentVariable("VCPKG_INSTALLATION_ROOT")
+    if ($vcpkgInstallationRoot) {
+        $candidates.Add($vcpkgInstallationRoot)
+    }
 
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         $vcpkg = if ((Split-Path $candidate -Leaf) -ieq "vcpkg.exe") {

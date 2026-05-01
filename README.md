@@ -41,9 +41,9 @@ Install these tools before building on Windows:
 - Python 3 available as `python.exe`.
 - vcpkg available through one of:
   - `VCPKG_ROOT`
-  - `VCPKG_INSTALLATION_ROOT`
   - `vcpkg.exe` on `PATH`
   - `C:\vcpkg` as a convenience fallback for common CI images.
+  - `VCPKG_INSTALLATION_ROOT`
 
 The build script installs or updates Meson and Ninja through Python/pip when it
 runs. You can preinstall them, but the scripted path is the supported one.
@@ -173,9 +173,11 @@ The build script installs these dependencies through vcpkg as needed:
 - `libsamplerate`
 - `vulkan-headers` for full builds
 
-The script looks for vcpkg using `VCPKG_ROOT`, `VCPKG_INSTALLATION_ROOT`,
-`vcpkg.exe` on `PATH`, then the CI-friendly fallback `C:\vcpkg`. Prefer an
-environment variable for local machines.
+The script looks for vcpkg using `VCPKG_ROOT`, `vcpkg.exe` on `PATH`, the
+CI-friendly fallback `C:\vcpkg`, then `VCPKG_INSTALLATION_ROOT`. Prefer
+`VCPKG_ROOT` for local machines because Visual Studio can set
+`VCPKG_INSTALLATION_ROOT` to its bundled vcpkg, which may not support classic
+mode installs.
 
 ## Troubleshooting
 

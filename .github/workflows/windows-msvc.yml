@@ -2,6 +2,7 @@ name: Windows MSVC Build
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VCPKG_ROOT: C:\vcpkg
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
   VCPKG_FEATURE_FLAGS: binarycaching
 
