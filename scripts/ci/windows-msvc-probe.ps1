@@ -18,19 +18,19 @@ function Import-VisualStudioEnvironment {
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) {
-        throw "vswhere.exe not found"
+        throw "vswhere.exe was not found. Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ workload."
     }
 
     $installPath = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath
     if (-not $installPath) {
-        throw "Visual Studio with MSVC tools was not found"
+        throw "Visual Studio C++ tools were not found. Install the MSVC x64/x86 build tools component and run this script again."
     }
 
     $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"
     if (-not (Test-Path $vcvars)) {
-        throw "vcvarsall.bat not found at $vcvars"
+        throw "vcvarsall.bat was not found at $vcvars. Repair the Visual Studio C++ toolchain installation."
     }
 
     $environment = & cmd.exe /s /c "`"$vcvars`" $Arch >nul && set"
@@ -39,6 +39,30 @@ function Import-VisualStudioEnvironment {
             Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
         }
     }
+}
+
+function Assert-Command {
+    param(
+        [string]$Name,
+        [string]$Hint
+    )
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) {
+        throw "$Name was not found on PATH. $Hint"
+    }
+    return $command.Source
+}
+
+function Assert-MsvcLinkFirst {
+    $link = Get-Command link.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $link) {
+        throw "link.exe was not found after importing the Visual Studio environment. Install the MSVC linker component."
+    }
+    if ($link.Source -match "\\Git\\usr\\bin\\link\.exe$") {
+        throw "Git for Windows link.exe is first on PATH: $($link.Source). The MSVC linker must be first. Run from a Visual Studio Developer environment or let this script import vcvarsall before Git usr\bin."
+    }
+    return $link.Source
 }
 
 function ConvertTo-GitBashPath {
@@ -57,19 +81,29 @@ function ConvertTo-WindowsSlashPath {
 }
 
 function Find-Vcpkg {
+    $envCandidates = @(
+        "VCPKG_ROOT",
+        "VCPKG_INSTALLATION_ROOT"
+    )
+
     $candidates = @(
-        $env:VCPKG_INSTALLATION_ROOT,
+        ($envCandidates | ForEach-Object { [Environment]::GetEnvironmentVariable($_) }),
+        (Get-Command vcpkg.exe -ErrorAction SilentlyContinue | ForEach-Object { Split-Path $_.Source -Parent }),
         "C:\vcpkg"
     ) | Where-Object { $_ }
 
     foreach ($candidate in $candidates) {
-        $vcpkg = Join-Path $candidate "vcpkg.exe"
+        $vcpkg = if ((Split-Path $candidate -Leaf) -ieq "vcpkg.exe") {
+            $candidate
+        } else {
+            Join-Path $candidate "vcpkg.exe"
+        }
         if (Test-Path $vcpkg) {
             return $vcpkg
         }
     }
 
-    throw "vcpkg.exe was not found"
+    throw "vcpkg.exe was not found. Set VCPKG_ROOT or VCPKG_INSTALLATION_ROOT to a vcpkg checkout, or put vcpkg.exe on PATH. The C:\vcpkg location is only a convenience fallback for common CI/runner images."
 }
 
 function Invoke-LoggedCommand {
@@ -977,6 +1011,13 @@ $script:PhaseEvents | Set-Content -Path $script:PhaseLog
 
 Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture
+$clPath = Assert-Command -Name "cl.exe" -Hint "Install the MSVC compiler tools."
+$clangClPath = Assert-Command -Name "clang-cl.exe" -Hint "Install the C++ Clang tools for Windows component in Visual Studio."
+$linkPath = Assert-MsvcLinkFirst
+$rcPath = Assert-Command -Name "rc.exe" -Hint "Install a Windows SDK with resource compiler tools."
+$midlPath = Assert-Command -Name "midl.exe" -Hint "Install a Windows SDK with MIDL tools."
+$bashPath = Assert-Command -Name "bash.exe" -Hint "Install Git for Windows and ensure Git usr\bin is reachable after the MSVC tools in PATH."
+$pythonPath = Assert-Command -Name "python.exe" -Hint "Install Python 3 and enable the PATH option, or start from a shell where python.exe is available."
 
 Write-Host "Windows MSVC build environment"
 Write-Host "Repository: $repoRoot"
@@ -986,15 +1027,20 @@ Write-Host "QEMU CPU:   $QemuCpu"
 Write-Host "Scope:      $BuildScope"
 Write-Host "Config:     $BuildConfig"
 Write-Host "vcpkg:      $VcpkgTriplet"
+Write-Host "cl.exe:     $clPath"
+Write-Host "clang-cl:   $clangClPath"
+Write-Host "link.exe:   $linkPath"
+Write-Host "rc.exe:     $rcPath"
+Write-Host "midl.exe:   $midlPath"
+Write-Host "bash.exe:   $bashPath"
+Write-Host "python.exe: $pythonPath"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
 where.exe clang-cl 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "where-clang-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
 $compilerCommand = "cl.exe"
-if (Get-Command clang-cl.exe -ErrorAction SilentlyContinue) {
-    $compilerCommand = "clang-cl.exe"
-}
+$compilerCommand = "clang-cl.exe"
 Write-Host "Compiler:   $compilerCommand"
 End-Phase "toolchain setup"
 
@@ -1053,8 +1099,8 @@ $env:PKG_CONFIG = $pkgConfig
 $env:PKG_CONFIG_LIBDIR = $pkgConfigDirs -join ";"
 $env:PKG_CONFIG_PATH = $env:PKG_CONFIG_LIBDIR
 
-$msvcBin = Split-Path (Get-Command cl.exe -ErrorAction Stop).Source -Parent
-$sdkBin = Split-Path (Get-Command rc.exe -ErrorAction Stop).Source -Parent
+$msvcBin = Split-Path $clPath -Parent
+$sdkBin = Split-Path $rcPath -Parent
 $msvcBinBash = ConvertTo-GitBashPath $msvcBin
 $sdkBinBash = ConvertTo-GitBashPath $sdkBin
 $vcpkgBinBash = ConvertTo-GitBashPath $vcpkgBin
@@ -1091,7 +1137,7 @@ if (Test-Path $buildPath) {
 }
 New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
 
-$bash = (Get-Command bash.exe -ErrorAction Stop).Source
+$bash = $bashPath
 $wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
 $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
 @(

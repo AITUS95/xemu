@@ -31,16 +31,6 @@
       "currentDir": "${workspaceRoot}",
       "cwd": "${workspaceRoot}",
       "args": []
-    },
-    {
-      "type": "default",
-      "project": "build-msvc\\qemu-system-i386w.exe",
-      "program": "${workspaceRoot}\\build-msvc\\qemu-system-i386w.exe",
-      "name": "xemu MSVC Fallback build-msvc",
-      "debugType": "native",
-      "currentDir": "${workspaceRoot}",
-      "cwd": "${workspaceRoot}",
-      "args": []
     }
   ]
 }

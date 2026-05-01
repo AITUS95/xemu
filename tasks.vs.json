@@ -19,6 +19,8 @@
         "amd64",
         "-QemuCpu",
         "x86_64",
+        "-BuildDir",
+        "build-msvc-debug",
         "-BuildScope",
         "full",
         "-BuildConfig",
@@ -43,6 +45,8 @@
         "amd64",
         "-QemuCpu",
         "x86_64",
+        "-BuildDir",
+        "build-msvc-profile",
         "-BuildScope",
         "full",
         "-BuildConfig",
@@ -67,10 +71,60 @@
         "amd64",
         "-QemuCpu",
         "x86_64",
+        "-BuildDir",
+        "build-msvc-release",
         "-BuildScope",
         "full",
         "-BuildConfig",
         "release"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Debug",
+      "taskName": "xemu MSVC Rebuild Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; @('build-msvc-debug','msvc-artifacts\\debug','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-debug -BuildScope full -BuildConfig debug"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Profile",
+      "taskName": "xemu MSVC Rebuild Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; @('build-msvc-profile','msvc-artifacts\\profile','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-profile -BuildScope full -BuildConfig profile"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Release",
+      "taskName": "xemu MSVC Rebuild Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; @('build-msvc-release','msvc-artifacts\\release','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { if (Test-Path -LiteralPath $_) { Remove-Item -LiteralPath $_ -Recurse -Force } }; & '.\\scripts\\ci\\windows-msvc-probe.ps1' -Architecture amd64 -QemuCpu x86_64 -BuildDir build-msvc-release -BuildScope full -BuildConfig release"
       ]
     },
     {

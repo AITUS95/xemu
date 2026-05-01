@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Makefile wrapper: Meson/Ninja and scripts/ci/windows-msvc-probe.ps1 remain the real build system. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
       <Configuration>Debug</Configuration>
@@ -40,46 +41,42 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
+  <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
+    <XemuArchitecture>amd64</XemuArchitecture>
+    <XemuQemuCpu>x86_64</XemuQemuCpu>
+    <XemuBuildScope>full</XemuBuildScope>
     <MsvcProbeScript>$(ProjectDir)scripts\ci\windows-msvc-probe.ps1</MsvcProbeScript>
-    <MsvcProbeCleanCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; @('build-msvc','build-msvc-debug','build-msvc-profile','build-msvc-release','msvc-artifacts','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { $p = Join-Path '$(ProjectDir)' $_; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }"</MsvcProbeCleanCommand>
+    <MsvcProbeCommonArgs>-Architecture $(XemuArchitecture) -QemuCpu $(XemuQemuCpu) -BuildScope $(XemuBuildScope)</MsvcProbeCommonArgs>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig debug</NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>$(MsvcProbeCleanCommand) &amp;&amp; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig debug</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>$(MsvcProbeCleanCommand)</NMakeCleanCommandLine>
+    <XemuBuildConfig>debug</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-debug</XemuBuildDir>
     <NMakeOutput>$(ProjectDir)msvc-artifacts\debug\xemu.exe</NMakeOutput>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
-    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig profile</NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>$(MsvcProbeCleanCommand) &amp;&amp; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig profile</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>$(MsvcProbeCleanCommand)</NMakeCleanCommandLine>
+    <XemuBuildConfig>profile</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-profile</XemuBuildDir>
     <NMakeOutput>$(ProjectDir)msvc-artifacts\profile\xemu.exe</NMakeOutput>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig release</NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>$(MsvcProbeCleanCommand) &amp;&amp; powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" -Architecture amd64 -QemuCpu x86_64 -BuildScope full -BuildConfig release</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>$(MsvcProbeCleanCommand)</NMakeCleanCommandLine>
+    <XemuBuildConfig>release</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-release</XemuBuildDir>
     <NMakeOutput>$(ProjectDir)msvc-artifacts\release\xemu.exe</NMakeOutput>
   </PropertyGroup>
   <PropertyGroup>
+    <MsvcProbeBuildCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcProbeScript)" $(MsvcProbeCommonArgs) -BuildDir "$(XemuBuildDir)" -BuildConfig "$(XemuBuildConfig)"</MsvcProbeBuildCommand>
+    <MsvcProbeCleanConfigCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; @('$(XemuBuildDir)','msvc-artifacts\$(XemuBuildConfig)','msvc-probe-logs','xemu-msvc-logs') | ForEach-Object { $p = Join-Path '$(ProjectDir)' $_; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }"</MsvcProbeCleanConfigCommand>
+    <NMakeBuildCommandLine>$(MsvcProbeBuildCommand)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>$(MsvcProbeCleanConfigCommand) &amp;&amp; $(MsvcProbeBuildCommand)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>$(MsvcProbeCleanConfigCommand)</NMakeCleanCommandLine>
     <NMakePreprocessorDefinitions>WIN32;_WIN32;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_GNU_SOURCE;XBOX=1;CONFIG_WIN32=1;CONFIG_TCG=1;NOMINMAX;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
-    <NMakeIncludeSearchPath>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)host\include;$(ProjectDir)host\include\x86_64;$(ProjectDir)build-msvc;$(ProjectDir)build-msvc\include;$(ProjectDir)build-msvc\qapi;$(ProjectDir)subprojects\libvhost-user;$(ProjectDir)subprojects\libvhost-user\include;$(ProjectDir)subprojects\libvduse;$(ProjectDir)subprojects\libvduse\include;$(ProjectDir)thirdparty;$(ProjectDir)thirdparty\nvapi;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
-    <NMakeForcedIncludes>$(NMakeForcedIncludes)</NMakeForcedIncludes>
-    <NMakeAssemblySearchPath>$(NMakeAssemblySearchPath)</NMakeAssemblySearchPath>
+    <NMakeIncludeSearchPath>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)host\include;$(ProjectDir)host\include\x86_64;$(ProjectDir)build-msvc;$(ProjectDir)build-msvc\include;$(ProjectDir)build-msvc\qapi;$(ProjectDir)build-msvc-debug;$(ProjectDir)build-msvc-debug\include;$(ProjectDir)build-msvc-profile;$(ProjectDir)build-msvc-profile\include;$(ProjectDir)build-msvc-release;$(ProjectDir)build-msvc-release\include;$(ProjectDir)subprojects\libvhost-user;$(ProjectDir)subprojects\libvhost-user\include;$(ProjectDir)subprojects\libvduse;$(ProjectDir)subprojects\libvduse\include;$(ProjectDir)thirdparty;$(ProjectDir)thirdparty\nvapi;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" />
+    <None Include="xemu-msvc.vcxproj" />
     <None Include="tasks.vs.json" />
     <None Include="launch.vs.json" />
     <None Include="CppProperties.json" />

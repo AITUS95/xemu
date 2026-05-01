@@ -5,11 +5,13 @@
 /build-msvc-profile/
 /build-msvc-release/
 /.cache/
+/.vcpkg-binary-cache/
 /.vs/
 /.vscode/
 *.vcxproj.user
 /xemu-msvc/
 *.pyc
+__pycache__/
 .sdk
 .stgit-*
 .git-submodule-status
@@ -31,6 +33,7 @@ build.log
 /dist
 /msvc-native-artifacts/
 /msvc-probe-logs/
+/subprojects/packagecache/
 /xemu-msvc-logs/
 /xemu.ini
 /macos-libs/

@@ -80,7 +80,6 @@ jobs:
           path: |
             .vcpkg-binary-cache
             C:\vcpkg\downloads
-            C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
@@ -153,7 +152,6 @@ jobs:
           path: |
             .vcpkg-binary-cache
             C:\vcpkg\downloads
-            C:\Users\runneradmin\AppData\Local\vcpkg\archives
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
 
