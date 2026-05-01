@@ -128,9 +128,10 @@ Reusable caches speed up future builds:
 - `.vcpkg-binary-cache`
 
 After a successful build, `-CleanIntermediates` removes build trees and logs but
-keeps `msvc-artifacts/<config>`. `-CleanAll` also removes reusable local caches,
-which saves disk space but makes the next build slower. `-KeepBuildTree` keeps
-the build tree for debugging even when cleanup switches are present.
+keeps `msvc-artifacts/<config>` and does not remove artifacts from other
+configurations. `-CleanAll` also removes reusable local caches, which saves disk
+space but makes the next build slower. `-KeepBuildTree` keeps the build tree for
+debugging even when cleanup switches are present.
 
 Cleanup never removes source files, tracked configuration files, Visual Studio
 JSON files, or runtime assets supplied by the user.
@@ -223,7 +224,9 @@ environment automatically.
 `link.exe` resolves to Git for Windows
 
 Git also ships a `link.exe` under `usr\bin`. The probe imports the Visual Studio
-environment first and fails if the Git linker shim is first on `PATH`.
+environment first, then adds Git for Windows while keeping MSVC `link.exe`
+ahead of Git's linker shim. The probe still fails if `link.exe` does not resolve
+to the MSVC linker.
 
 `rc.exe` or `midl.exe was not found`
 
@@ -231,7 +234,9 @@ Install a Windows SDK through Visual Studio Installer.
 
 `bash.exe` or `sh.exe was not found`
 
-Install Git for Windows and ensure command-line tools are available.
+Install Git for Windows and ensure command-line tools are available. The scripts
+search common Git for Windows install roots and the root discovered from
+`git.exe`; no personal or absolute repository path is required.
 
 `python.exe was not found`
 

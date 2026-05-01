@@ -16,6 +16,11 @@ $ErrorActionPreference = "Stop"
 function Import-VisualStudioEnvironment {
     param([string]$Arch)
 
+    $preservedEnv = @{}
+    foreach ($name in @("VCPKG_ROOT", "VCPKG_DOWNLOADS", "VCPKG_DEFAULT_BINARY_CACHE", "VCPKG_FEATURE_FLAGS", "VCPKG_BINARY_SOURCES")) {
+        $preservedEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) {
         throw "vswhere.exe was not found. Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ workload."
@@ -47,6 +52,12 @@ function Import-VisualStudioEnvironment {
             Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
         }
     }
+
+    foreach ($name in $preservedEnv.Keys) {
+        if ($preservedEnv[$name]) {
+            Set-Item -Path "Env:$name" -Value $preservedEnv[$name]
+        }
+    }
 }
 
 function Assert-Command {
@@ -73,10 +84,52 @@ function Assert-MsvcLinkFirst {
     return $link.Source
 }
 
+function Add-GitForWindowsToPath {
+    $roots = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($command in Get-Command git.exe -ErrorAction SilentlyContinue) {
+        if ($command.Source) {
+            $dir = Split-Path $command.Source -Parent
+            if ((Split-Path $dir -Leaf) -ieq "cmd") {
+                $roots.Add((Split-Path $dir -Parent))
+            }
+        }
+    }
+
+    foreach ($root in @(
+        (Join-Path $env:ProgramFiles "Git"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git")
+    )) {
+        if ($root) {
+            $roots.Add($root)
+        }
+    }
+
+    foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+        $bash = Join-Path $root "bin\bash.exe"
+        $sh = Join-Path $root "usr\bin\sh.exe"
+        if ((Test-Path -LiteralPath $bash) -and (Test-Path -LiteralPath $sh)) {
+            $gitBin = Join-Path $root "bin"
+            $gitUsrBin = Join-Path $root "usr\bin"
+            $pathEntries = $env:PATH -split ";" |
+                Where-Object {
+                    $_ -and
+                    ([System.IO.Path]::GetFullPath($_).TrimEnd("\") -ine [System.IO.Path]::GetFullPath($gitBin).TrimEnd("\")) -and
+                    ([System.IO.Path]::GetFullPath($_).TrimEnd("\") -ine [System.IO.Path]::GetFullPath($gitUsrBin).TrimEnd("\"))
+                }
+            $env:PATH = (@($gitBin) + $pathEntries + @($gitUsrBin)) -join ";"
+            Write-Host "Git for Windows: $root"
+            return
+        }
+    }
+
+    throw "Git for Windows bash.exe/sh.exe were not found. Install Git for Windows or add its bin and usr\bin directories to PATH."
+}
+
 function ConvertTo-GitBashPath {
     param([string]$WindowsPath)
 
-    $fullPath = (Resolve-Path $WindowsPath).Path
+    $fullPath = [System.IO.Path]::GetFullPath($WindowsPath)
     $drive = $fullPath.Substring(0, 1).ToLowerInvariant()
     $path = $fullPath.Substring(2).Replace("\", "/")
     return "/$drive$path"
@@ -85,7 +138,7 @@ function ConvertTo-GitBashPath {
 function ConvertTo-WindowsSlashPath {
     param([string]$WindowsPath)
 
-    return (Resolve-Path $WindowsPath).Path.Replace("\", "/")
+    return [System.IO.Path]::GetFullPath($WindowsPath).Replace("\", "/")
 }
 
 function Find-Vcpkg {
@@ -1100,7 +1153,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue $wrapperLog
 New-Item -ItemType File -Force -Path $wrapperLog | Out-Null
 $keepArtifacts = $env:MSVC_PROBE_KEEP_ARTIFACTS -in @("1", "true", "yes")
 if (-not $keepArtifacts) {
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $artifactsRoot
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $artifactsRoot $BuildConfig)
 }
 New-Item -ItemType Directory -Force -Path $artifactsRoot | Out-Null
 $script:PhaseLog = Join-Path $logsDir "phase-timings.log"
@@ -1108,12 +1161,14 @@ $script:PhaseEvents | Set-Content -Path $script:PhaseLog
 
 Start-Phase "toolchain setup"
 Import-VisualStudioEnvironment -Arch $Architecture
+Add-GitForWindowsToPath
 $clPath = Assert-Command -Name "cl.exe" -Hint "Install the MSVC compiler tools."
 $clangClPath = Assert-Command -Name "clang-cl.exe" -Hint "Install the C++ Clang tools for Windows component in Visual Studio."
 $linkPath = Assert-MsvcLinkFirst
 $rcPath = Assert-Command -Name "rc.exe" -Hint "Install a Windows SDK with resource compiler tools."
 $midlPath = Assert-Command -Name "midl.exe" -Hint "Install a Windows SDK with MIDL tools."
 $bashPath = Assert-Command -Name "bash.exe" -Hint "Install Git for Windows and ensure Git usr\bin is reachable after the MSVC tools in PATH."
+$shPath = Assert-Command -Name "sh.exe" -Hint "Install Git for Windows and ensure Git usr\bin is reachable after the MSVC tools in PATH."
 $pythonPath = Assert-Command -Name "python.exe" -Hint "Install Python 3 and enable the PATH option, or start from a shell where python.exe is available."
 
 Write-Host "Windows MSVC build environment"
@@ -1130,12 +1185,14 @@ Write-Host "link.exe:   $linkPath"
 Write-Host "rc.exe:     $rcPath"
 Write-Host "midl.exe:   $midlPath"
 Write-Host "bash.exe:   $bashPath"
+Write-Host "sh.exe:     $shPath"
 Write-Host "python.exe: $pythonPath"
 
 where.exe cl | Tee-Object -FilePath (Join-Path $logsDir "where-cl.log")
 where.exe clang-cl 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "where-clang-cl.log")
 where.exe link | Tee-Object -FilePath (Join-Path $logsDir "where-link.log")
 where.exe bash | Tee-Object -FilePath (Join-Path $logsDir "where-bash.log")
+where.exe sh | Tee-Object -FilePath (Join-Path $logsDir "where-sh.log")
 $compilerCommand = "cl.exe"
 $compilerCommand = "clang-cl.exe"
 Write-Host "Compiler:   $compilerCommand"
@@ -1250,6 +1307,7 @@ $pkgconfBinBash = ConvertTo-GitBashPath $pkgconfBin
 $pkgConfigMeson = ConvertTo-WindowsSlashPath $pkgConfig
 $pkgConfigLibdirMeson = ($pkgConfigDirs | ForEach-Object { ConvertTo-WindowsSlashPath $_ }) -join ";"
 $repoRootMeson = ConvertTo-WindowsSlashPath $repoRoot
+$buildPathMeson = ConvertTo-WindowsSlashPath $buildPath
 $wrapperLogMeson = $wrapperLog.Replace("\", "/")
 $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBinBash, '$PATH') -join ":"
 
@@ -1294,6 +1352,7 @@ $configureArgs = @(
     "../configure",
     "--cc=$localCompilerMeson",
     "--cxx=$localCompilerMeson",
+    "--prefix=$buildPathMeson/install",
     "--cpu=$QemuCpu",
     "--target-list=i386-softmmu",
     "--without-default-features",
@@ -1474,7 +1533,8 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     }
 
     if ($null -eq $buildExit -or $buildExit -eq 0) {
-        $compileLine = "echo Windows MSVC ${BuildScope}/${BuildConfig} target: ${compileTarget}; python -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ${logsDirBash}/build-output.log 2>&1"
+        $buildPythonMeson = ConvertTo-WindowsSlashPath $buildPython
+        $compileLine = "echo Windows MSVC ${BuildScope}/${BuildConfig} target: ${compileTarget}; `"$buildPythonMeson`" -m mesonbuild.mesonmain compile -C . `"${compileTarget}`" --verbose > ${logsDirBash}/build-output.log 2>&1"
 
         $buildCommand = @(
             "set -o pipefail",

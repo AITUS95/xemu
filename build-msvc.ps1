@@ -57,6 +57,11 @@ function Assert-InRepoPath {
 function Import-VisualStudioEnvironment {
     param([string]$Arch)
 
+    $preservedEnv = @{}
+    foreach ($name in @("VCPKG_ROOT", "VCPKG_DOWNLOADS", "VCPKG_DEFAULT_BINARY_CACHE", "VCPKG_FEATURE_FLAGS", "VCPKG_BINARY_SOURCES")) {
+        $preservedEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw "vswhere.exe was not found. Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ workload."
@@ -88,6 +93,12 @@ function Import-VisualStudioEnvironment {
             Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
         }
     }
+
+    foreach ($name in $preservedEnv.Keys) {
+        if ($preservedEnv[$name]) {
+            Set-Item -Path "Env:$name" -Value $preservedEnv[$name]
+        }
+    }
 }
 
 function Assert-Tool {
@@ -107,6 +118,7 @@ function Assert-Tool {
 function Test-MsvcToolchain {
     Write-Step "Checking Visual Studio/MSVC toolchain"
     Import-VisualStudioEnvironment -Arch $Architecture
+    Add-GitForWindowsToPath
     Assert-Tool -Name "cl.exe" -Hint "Install the MSVC compiler tools." | Out-Null
     Assert-Tool -Name "clang-cl.exe" -Hint "Install the C++ Clang tools for Windows component in Visual Studio." | Out-Null
     $link = Assert-Tool -Name "link.exe" -Hint "Install the MSVC linker component."
@@ -117,6 +129,48 @@ function Test-MsvcToolchain {
     Assert-Tool -Name "midl.exe" -Hint "Install a Windows SDK with MIDL tools." | Out-Null
     Assert-Tool -Name "bash.exe" -Hint "Install Git for Windows." | Out-Null
     Assert-Tool -Name "sh.exe" -Hint "Install Git for Windows." | Out-Null
+}
+
+function Add-GitForWindowsToPath {
+    $roots = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($command in Get-Command git.exe -ErrorAction SilentlyContinue) {
+        if ($command.Source) {
+            $dir = Split-Path $command.Source -Parent
+            if ((Split-Path $dir -Leaf) -ieq "cmd") {
+                $roots.Add((Split-Path $dir -Parent))
+            }
+        }
+    }
+
+    foreach ($root in @(
+        (Join-Path $env:ProgramFiles "Git"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git")
+    )) {
+        if ($root) {
+            $roots.Add($root)
+        }
+    }
+
+    foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+        $bash = Join-Path $root "bin\bash.exe"
+        $sh = Join-Path $root "usr\bin\sh.exe"
+        if ((Test-Path -LiteralPath $bash) -and (Test-Path -LiteralPath $sh)) {
+            $gitBin = Join-Path $root "bin"
+            $gitUsrBin = Join-Path $root "usr\bin"
+            $pathEntries = $env:PATH -split ";" |
+                Where-Object {
+                    $_ -and
+                    ([System.IO.Path]::GetFullPath($_).TrimEnd("\") -ine [System.IO.Path]::GetFullPath($gitBin).TrimEnd("\")) -and
+                    ([System.IO.Path]::GetFullPath($_).TrimEnd("\") -ine [System.IO.Path]::GetFullPath($gitUsrBin).TrimEnd("\"))
+                }
+            $env:PATH = (@($gitBin) + $pathEntries + @($gitUsrBin)) -join ";"
+            Write-Host "Git for Windows: $root"
+            return
+        }
+    }
+
+    throw "Git for Windows bash.exe/sh.exe were not found. Install Git for Windows or add its bin and usr\bin directories to PATH."
 }
 
 function Remove-RepoPath {
@@ -259,11 +313,13 @@ function Ensure-Vcpkg {
             }
 
             Write-Step "Bootstrapping standalone vcpkg in .vcpkg-tool"
-            & $git.Source clone --depth 1 https://github.com/microsoft/vcpkg.git $LocalVcpkgRoot
+            & $git.Source clone --depth 1 https://github.com/microsoft/vcpkg.git $LocalVcpkgRoot 2>&1 |
+                ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to clone vcpkg into .vcpkg-tool."
             }
-            & (Join-Path $LocalVcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+            & (Join-Path $LocalVcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics 2>&1 |
+                ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to bootstrap vcpkg."
             }
@@ -311,8 +367,30 @@ function Invoke-MsvcProbe {
     }
 
     Write-Step "Starting MSVC $ConfigName build"
-    & $hostPath @args
-    return $LASTEXITCODE
+    & $hostPath @args 2>&1 | ForEach-Object { Write-Host $_ }
+    $processExit = [int]$LASTEXITCODE
+
+    $statusPath = Join-Path $RepoRoot "msvc-probe-logs\status.txt"
+    if (Test-Path -LiteralPath $statusPath) {
+        $status = @{}
+        Get-Content -Path $statusPath | ForEach-Object {
+            if ($_ -match "^([^=]+)=(.*)$") {
+                $status[$matches[1]] = $matches[2]
+            }
+        }
+
+        foreach ($key in @("configure_exit_code", "build_exit_code")) {
+            if ($status.ContainsKey($key) -and $status[$key] -notin @("0", "not_run")) {
+                Write-Error "MSVC probe reported $key=$($status[$key]). Check msvc-probe-logs."
+                return 1
+            }
+        }
+    } elseif ($processExit -eq 0) {
+        Write-Error "MSVC probe did not produce msvc-probe-logs\\status.txt."
+        return 1
+    }
+
+    return $processExit
 }
 
 $configName = Get-ConfigName -Name $Config
