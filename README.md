@@ -43,7 +43,8 @@ Install these tools before building on Windows:
   - `VCPKG_ROOT`
   - `vcpkg.exe` on `PATH`
   - `C:\vcpkg` as a convenience fallback for common CI images.
-  - `VCPKG_INSTALLATION_ROOT`
+  - Use a standalone vcpkg checkout. The vcpkg copy bundled inside Visual
+    Studio is ignored because it may not support classic mode installs.
 
 The build script installs or updates Meson and Ninja through Python/pip when it
 runs. You can preinstall them, but the scripted path is the supported one.
@@ -173,11 +174,10 @@ The build script installs these dependencies through vcpkg as needed:
 - `libsamplerate`
 - `vulkan-headers` for full builds
 
-The script looks for vcpkg using `VCPKG_ROOT`, `vcpkg.exe` on `PATH`, the
-CI-friendly fallback `C:\vcpkg`, then `VCPKG_INSTALLATION_ROOT`. Prefer
-`VCPKG_ROOT` for local machines because Visual Studio can set
-`VCPKG_INSTALLATION_ROOT` to its bundled vcpkg, which may not support classic
-mode installs.
+The script looks for vcpkg using `VCPKG_ROOT`, `vcpkg.exe` on `PATH`, then the
+CI-friendly fallback `C:\vcpkg`. Prefer `VCPKG_ROOT` for local machines. The
+Visual Studio bundled vcpkg is ignored because it may not support the classic
+mode installs used by this branch.
 
 ## Troubleshooting
 
@@ -216,7 +216,9 @@ and `build-output.log`.
 
 `vcpkg.exe was not found`
 
-Set `VCPKG_ROOT` or `VCPKG_INSTALLATION_ROOT`, or put `vcpkg.exe` on `PATH`.
+Set `VCPKG_ROOT`, or put a standalone `vcpkg.exe` on `PATH`. The Visual Studio
+bundled vcpkg can report that it has no classic mode instance and is not used by
+this build.
 
 Paths with spaces
 

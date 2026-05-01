@@ -82,6 +82,7 @@ function ConvertTo-WindowsSlashPath {
 
 function Find-Vcpkg {
     $candidates = [System.Collections.Generic.List[string]]::new()
+    $skippedVisualStudioVcpkg = [System.Collections.Generic.List[string]]::new()
 
     $vcpkgRoot = [Environment]::GetEnvironmentVariable("VCPKG_ROOT")
     if ($vcpkgRoot) {
@@ -96,11 +97,6 @@ function Find-Vcpkg {
 
     $candidates.Add("C:\vcpkg")
 
-    $vcpkgInstallationRoot = [Environment]::GetEnvironmentVariable("VCPKG_INSTALLATION_ROOT")
-    if ($vcpkgInstallationRoot) {
-        $candidates.Add($vcpkgInstallationRoot)
-    }
-
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         $vcpkg = if ((Split-Path $candidate -Leaf) -ieq "vcpkg.exe") {
             $candidate
@@ -108,11 +104,21 @@ function Find-Vcpkg {
             Join-Path $candidate "vcpkg.exe"
         }
         if (Test-Path $vcpkg) {
+            $resolved = (Resolve-Path $vcpkg).Path
+            if ($resolved -match "\\Microsoft Visual Studio\\.*\\VC\\vcpkg\\vcpkg\.exe$") {
+                $skippedVisualStudioVcpkg.Add($resolved)
+                continue
+            }
             return $vcpkg
         }
     }
 
-    throw "vcpkg.exe was not found. Set VCPKG_ROOT or VCPKG_INSTALLATION_ROOT to a vcpkg checkout, or put vcpkg.exe on PATH. The C:\vcpkg location is only a convenience fallback for common CI/runner images."
+    if ($skippedVisualStudioVcpkg.Count -gt 0) {
+        $paths = $skippedVisualStudioVcpkg -join "; "
+        throw "Only the Visual Studio bundled vcpkg was found ($paths), but this build requires a standalone vcpkg checkout with classic mode. Set VCPKG_ROOT to a standalone vcpkg checkout, or put that vcpkg.exe earlier on PATH."
+    }
+
+    throw "vcpkg.exe was not found. Set VCPKG_ROOT to a standalone vcpkg checkout, or put a standalone vcpkg.exe on PATH. The C:\vcpkg location is only a convenience fallback for common CI/runner images."
 }
 
 function Invoke-LoggedCommand {

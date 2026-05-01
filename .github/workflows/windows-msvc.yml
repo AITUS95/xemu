@@ -2,7 +2,8 @@ name: Windows MSVC Build
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  VCPKG_ROOT: C:\vcpkg
+  VCPKG_ROOT: ${{ github.workspace }}\.vcpkg-tool
+  VCPKG_DOWNLOADS: ${{ github.workspace }}\.vcpkg-downloads
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
   VCPKG_FEATURE_FLAGS: binarycaching
 
@@ -80,12 +81,33 @@ jobs:
         with:
           path: |
             .vcpkg-binary-cache
-            C:\vcpkg\downloads
+            .vcpkg-downloads
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             msvc-vcpkg-${{ runner.os }}-v1-
             msvc-vcpkg-${{ runner.os }}-
+
+      - name: Ensure standalone vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $vcpkgRoot = [System.IO.Path]::GetFullPath($env:VCPKG_ROOT)
+          if (-not $vcpkgRoot.StartsWith($workspace, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "VCPKG_ROOT must stay inside the GitHub workspace: $vcpkgRoot"
+          }
+
+          $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
+          if (-not (Test-Path -LiteralPath $vcpkgExe)) {
+            if (Test-Path -LiteralPath $vcpkgRoot) {
+              Remove-Item -LiteralPath $vcpkgRoot -Recurse -Force
+            }
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git $vcpkgRoot
+            & (Join-Path $vcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics
+          }
+
+          & $vcpkgExe version
 
       - name: Run Windows MSVC Build
         shell: pwsh
@@ -152,7 +174,7 @@ jobs:
         with:
           path: |
             .vcpkg-binary-cache
-            C:\vcpkg\downloads
+            .vcpkg-downloads
             subprojects\packagecache
           key: msvc-vcpkg-${{ runner.os }}-v1-${{ matrix.build_config }}-${{ github.run_id }}-${{ github.run_attempt }}
 

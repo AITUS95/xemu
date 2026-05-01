@@ -6,6 +6,8 @@
 /build-msvc-release/
 /.cache/
 /.vcpkg-binary-cache/
+/.vcpkg-downloads/
+/.vcpkg-tool/
 /.vs/
 /.vscode/
 *.vcxproj.user
