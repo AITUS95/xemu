@@ -249,10 +249,26 @@ Use `build-msvc.ps1`; it creates `.venv-msvc` and installs Meson/Ninja there.
 Then inspect `msvc-probe-logs/meson-version.log`, `ninja-version.log`,
 `configure-output.log`, and `build-output.log`.
 
+`configure_exit_code=0` but no compile output was produced
+
+Inspect `msvc-probe-logs/phase-timings.log`. A valid full build should contain
+a `meson compile full` phase and `msvc-probe-logs/build-output.log`. If Meson's
+per-build `pyvenv` is missing, the probe falls back to `.venv-msvc` or another
+Python that has Meson installed instead of silently skipping compile.
+
 `vcpkg.exe was not found`
 
 Run `.\build-msvc.ps1 -BootstrapVcpkg -CheckOnly`, set `VCPKG_ROOT` to a
 standalone vcpkg checkout, or put a standalone `vcpkg.exe` on `PATH`.
+
+vcpkg bootstrap or clone fails
+
+The local wrapper can clone vcpkg into `.vcpkg-tool` and run
+`bootstrap-vcpkg.bat`. Normal Git clone progress may appear on stderr and is
+not treated as failure; only the native command exit code is authoritative. If
+bootstrap really fails, check internet access, Git for Windows,
+proxy/firewall settings, Visual Studio C++ tools, Windows SDK, and antivirus
+restrictions.
 
 Visual Studio bundled vcpkg is rejected
 

@@ -115,6 +115,71 @@ function Assert-Tool {
     return $command.Source
 }
 
+function Format-NativeCommandLine {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments
+    )
+
+    $parts = @($FilePath) + @($Arguments)
+    return ($parts | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + ($_ -replace '"', '\"') + '"'
+        } else {
+            $_
+        }
+    }) -join " "
+}
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @(),
+        [Parameter(Mandatory = $true)]
+        [string]$FailureMessage,
+        [string]$FailureHint = ""
+    )
+
+    $commandLine = Format-NativeCommandLine -FilePath $FilePath -Arguments $Arguments
+    Write-Host ">> $commandLine"
+
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+
+    foreach ($line in @($output)) {
+        Write-Host $line
+    }
+
+    if ($null -eq $exitCode) {
+        $exitCode = 0
+    }
+    if ($exitCode -ne 0) {
+        $details = [System.Collections.Generic.List[string]]::new()
+        $details.Add($FailureMessage)
+        $details.Add("Command: $commandLine")
+        $details.Add("Exit code: $exitCode")
+        if ($output) {
+            $details.Add("Output tail:")
+            foreach ($line in (@($output) | Select-Object -Last 80)) {
+                $details.Add([string]$line)
+            }
+        }
+        if ($FailureHint) {
+            $details.Add("Hint: $FailureHint")
+        }
+        throw ($details -join [Environment]::NewLine)
+    }
+
+    return $exitCode
+}
+
 function Test-MsvcToolchain {
     Write-Step "Checking Visual Studio/MSVC toolchain"
     Import-VisualStudioEnvironment -Arch $Architecture
@@ -313,16 +378,17 @@ function Ensure-Vcpkg {
             }
 
             Write-Step "Bootstrapping standalone vcpkg in .vcpkg-tool"
-            & $git.Source clone --depth 1 https://github.com/microsoft/vcpkg.git $LocalVcpkgRoot 2>&1 |
-                ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to clone vcpkg into .vcpkg-tool."
-            }
-            & (Join-Path $LocalVcpkgRoot "bootstrap-vcpkg.bat") -disableMetrics 2>&1 |
-                ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to bootstrap vcpkg."
-            }
+            Invoke-NativeCommand `
+                -FilePath $git.Source `
+                -Arguments @("clone", "--depth", "1", "https://github.com/microsoft/vcpkg.git", $LocalVcpkgRoot) `
+                -FailureMessage "Failed to clone vcpkg into .vcpkg-tool from https://github.com/microsoft/vcpkg.git." `
+                -FailureHint "Check internet access, Git for Windows, and proxy/firewall settings."
+
+            Invoke-NativeCommand `
+                -FilePath (Join-Path $LocalVcpkgRoot "bootstrap-vcpkg.bat") `
+                -Arguments @("-disableMetrics") `
+                -FailureMessage "Failed to bootstrap vcpkg in .vcpkg-tool." `
+                -FailureHint "Check the Visual Studio C++ toolchain, Windows SDK, network access, proxy/firewall settings, and antivirus restrictions."
         }
     }
 
@@ -367,8 +433,14 @@ function Invoke-MsvcProbe {
     }
 
     Write-Step "Starting MSVC $ConfigName build"
-    & $hostPath @args 2>&1 | ForEach-Object { Write-Host $_ }
-    $processExit = [int]$LASTEXITCODE
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $hostPath @args 2>&1 | ForEach-Object { Write-Host $_ }
+        $processExit = [int]$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
 
     $statusPath = Join-Path $RepoRoot "msvc-probe-logs\status.txt"
     if (Test-Path -LiteralPath $statusPath) {

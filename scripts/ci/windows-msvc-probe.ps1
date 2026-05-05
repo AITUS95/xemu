@@ -141,6 +141,62 @@ function ConvertTo-WindowsSlashPath {
     return [System.IO.Path]::GetFullPath($WindowsPath).Replace("\", "/")
 }
 
+function Test-PythonHasMeson {
+    param([string]$PythonPath)
+
+    if (-not $PythonPath -or -not (Test-Path -LiteralPath $PythonPath)) {
+        return $false
+    }
+
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $PythonPath -m mesonbuild.mesonmain --version > $null 2>&1
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+}
+
+function Resolve-MesonPython {
+    param(
+        [string]$BuildPath,
+        [string]$RepoRoot
+    )
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @(
+        (Join-Path $BuildPath "pyvenv\Scripts\python.exe"),
+        (Join-Path $BuildPath "pyvenv\Scripts\python3.exe"),
+        (Join-Path $RepoRoot ".venv-msvc\Scripts\python.exe"),
+        (Join-Path $RepoRoot ".venv-msvc\Scripts\python3.exe")
+    )) {
+        $candidates.Add($candidate)
+    }
+
+    foreach ($name in @("python.exe", "python3.exe")) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command -and $command.Source) {
+            $candidates.Add($command.Source)
+        }
+    }
+
+    $buildPyvenv = [System.IO.Path]::GetFullPath((Join-Path $BuildPath "pyvenv"))
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-PythonHasMeson -PythonPath $candidate) {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+            if (-not $resolved.StartsWith($buildPyvenv, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-Warning "Meson Python venv was not found under $BuildPath\pyvenv; using fallback Python with Meson: $resolved"
+            } else {
+                Write-Host "Meson Python: $resolved"
+            }
+            return $resolved
+        }
+    }
+
+    throw "No usable Python with Meson was found. Expected either $BuildPath\pyvenv\Scripts\python.exe, .venv-msvc\Scripts\python.exe, or python.exe with meson installed. Run build-msvc.ps1 so it can create .venv-msvc, or install Meson/Ninja for the active Python."
+}
+
 function Find-Vcpkg {
     $candidates = [System.Collections.Generic.List[string]]::new()
     $skippedVisualStudioVcpkg = [System.Collections.Generic.List[string]]::new()
@@ -265,6 +321,18 @@ function Invoke-LoggedCommand {
     Write-Host ">> $FilePath $($Arguments -join ' ')"
     & $FilePath @Arguments
     $script:LastCommandExitCode = $LASTEXITCODE
+}
+
+function Invoke-BashCommand {
+    param(
+        [string]$BashPath,
+        [string]$ScriptPath,
+        [string]$Command
+    )
+
+    $content = "#!/usr/bin/env bash`n$Command`n"
+    Set-Content -Path $ScriptPath -Value $content -Encoding ASCII -NoNewline
+    Invoke-LoggedCommand -FilePath $BashPath -Arguments @((ConvertTo-GitBashPath $ScriptPath))
 }
 
 function Write-LogSummary {
@@ -1196,6 +1264,8 @@ where.exe sh | Tee-Object -FilePath (Join-Path $logsDir "where-sh.log")
 $compilerCommand = "cl.exe"
 $compilerCommand = "clang-cl.exe"
 Write-Host "Compiler:   $compilerCommand"
+$compilerPath = if ($compilerCommand -eq "clang-cl.exe") { $clangClPath } else { $clPath }
+Write-Host "Compiler path: $compilerPath"
 End-Phase "toolchain setup"
 
 Start-Phase "vcpkg dependency install"
@@ -1314,7 +1384,7 @@ $probePathBash = @('$PWD', $msvcBinBash, $sdkBinBash, $pkgconfBinBash, $vcpkgBin
 Start-Phase "python and meson tool setup"
 $clVersionLog = Join-Path $logsDir "cl-version.log"
 if ($compilerCommand -eq "clang-cl.exe") {
-    clang-cl.exe --version 2>&1 | Tee-Object -FilePath $clVersionLog
+    & $compilerPath --version 2>&1 | Tee-Object -FilePath $clVersionLog
 } else {
     @(
         "compiler=$compilerCommand",
@@ -1342,7 +1412,7 @@ $wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
 $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
 @(
     "@echo off",
-    "python `"$wrapperPy`" $compilerCommand %*",
+    "`"$pythonPath`" `"$wrapperPy`" `"$compilerPath`" %*",
     "exit /b %ERRORLEVEL%"
 ) | Set-Content -Path $localCompiler -Encoding ASCII
 $localCompilerMeson = ConvertTo-WindowsSlashPath $localCompiler
@@ -1411,8 +1481,16 @@ $configureCommand = @(
 Push-Location $buildPath
 try {
     Start-Phase "meson setup"
-    Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $configureCommand)
+    Invoke-BashCommand -BashPath $bash -ScriptPath (Join-Path $buildPath "configure-msvc.sh") -Command $configureCommand
     $configureExit = $script:LastCommandExitCode
+    if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $logsDir "configure-output.log"))) {
+        Write-Warning "Meson setup exited 0, but configure-output.log was not written."
+        $configureExit = 1
+    }
+    if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $buildPath "meson-info\meson-info.json"))) {
+        Write-Warning "Meson setup exited 0, but no valid Meson build directory was created."
+        $configureExit = 1
+    }
     if ($configureExit -ne 0) {
         Write-LogSummary -Path (Join-Path $logsDir "configure-output.log") -Tail 150
     } else {
@@ -1424,18 +1502,12 @@ try {
 }
 
 $buildExit = $null
+$buildPython = $null
 if ($configureExit -eq 0) {
     Start-Phase "PyYAML install"
-    $buildPythonCandidates = @(
-        (Join-Path $buildPath "pyvenv\Scripts\python.exe"),
-        (Join-Path $buildPath "pyvenv\Scripts\python3.exe")
-    )
-    $buildPython = $buildPythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $buildPython) {
-        Write-Warning "Meson Python venv was not found under $buildPath\pyvenv."
-        $buildExit = 1
-    } else {
-        Invoke-LoggedCommand -FilePath $buildPython -Arguments @("-m", "pip", "install", "pyyaml")
+    try {
+        $buildPython = Resolve-MesonPython -BuildPath $buildPath -RepoRoot $repoRoot
+        Invoke-LoggedCommand -FilePath $buildPython -Arguments @("-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "--ignore-installed", "pyyaml")
         if ($script:LastCommandExitCode -ne 0) {
             $buildExit = $script:LastCommandExitCode
         } else {
@@ -1444,8 +1516,12 @@ if ($configureExit -eq 0) {
                 $buildExit = $script:LastCommandExitCode
             }
         }
+    } catch {
+        Write-Warning $_.Exception.Message
+        $buildExit = 1
+    } finally {
+        End-Phase "PyYAML install"
     }
-    End-Phase "PyYAML install"
 }
 
 if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
@@ -1460,7 +1536,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
     Push-Location $buildPath
     try {
         Start-Phase "xemu-version diagnostics"
-        Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $xemuVersionCommand)
+        Invoke-BashCommand -BashPath $bash -ScriptPath (Join-Path $buildPath "xemu-version-diagnostics.sh") -Command $xemuVersionCommand
         if ($script:LastCommandExitCode -ne 0) {
             $buildExit = $script:LastCommandExitCode
         }
@@ -1558,7 +1634,7 @@ if ($configureExit -eq 0 -and ($null -eq $buildExit -or $buildExit -eq 0)) {
         Push-Location $buildPath
         try {
             Start-Phase "meson compile $BuildScope"
-            Invoke-LoggedCommand -FilePath $bash -Arguments @("-lc", $buildCommand)
+            Invoke-BashCommand -BashPath $bash -ScriptPath (Join-Path $buildPath "compile-msvc.sh") -Command $buildCommand
             $buildExit = $script:LastCommandExitCode
             Write-Host "Build exit code: $buildExit"
             Write-LogSummary -Path (Join-Path $logsDir "build-output.log") -Tail 200
@@ -1666,51 +1742,67 @@ if ($configureExit -eq 0 -and $BuildScope -eq "full" -and $buildExit -eq 0) {
     }
 }
 
-Start-Phase "artifact packaging"
-if (Test-Path (Join-Path $buildPath "config.log")) {
-    Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
-}
-if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
-    Copy-Item (Join-Path $buildPath "meson-logs\meson-log.txt") (Join-Path $logsDir "meson-log.txt") -Force
-}
-$dependentsLog = Join-Path $logsDir "dependents.log"
-$layoutLog = Join-Path $logsDir "artifact-layout.log"
-$runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
-$runtimeRealSmokeLog = Join-Path $logsDir "runtime-real-smoke.log"
-$pdbCheckLog = Join-Path $logsDir "pdb-check.log"
-$xemuLog = Join-Path $logsDir "xemu.log"
-$xemuLogSearchLog = Join-Path $logsDir "xemu-log-search.log"
-$d8003MatchesLog = Join-Path $logsDir "missing-source-filename-matches.txt"
-if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
-if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
-if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
-if (-not (Test-Path $runtimeRealSmokeLog)) { "not_run" | Set-Content -Path $runtimeRealSmokeLog }
-if (-not (Test-Path $pdbCheckLog)) { "not_run" | Set-Content -Path $pdbCheckLog }
-if (-not (Test-Path $xemuLog)) { "not_run" | Set-Content -Path $xemuLog }
-if (-not (Test-Path $xemuLogSearchLog)) { "not_run" | Set-Content -Path $xemuLogSearchLog }
-if (-not (Test-Path $d8003MatchesLog)) { "not_run" | Set-Content -Path $d8003MatchesLog }
-
-if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $finalExecutable) {
-    "" | Set-Content -Path $dependentsLog
-    "" | Set-Content -Path $layoutLog
-    $artifactConfigName = switch ($BuildConfig) {
-        "release" { "release" }
-        "debug" { "debug" }
-        default { "profile" }
+Start-Phase "post-build log collection"
+try {
+    if (Test-Path (Join-Path $buildPath "config.log")) {
+        Copy-Item (Join-Path $buildPath "config.log") (Join-Path $logsDir "config.log") -Force
     }
-    $includePdb = $BuildConfig -ne "release"
-    $packagedArtifact = Copy-MsvcPackage `
-        -ConfigName $artifactConfigName `
-        -Executable $finalExecutable `
-        -Pdb $finalPdb `
-        -EmbeddedPdbNames $embeddedPdbNames `
-        -DependencyDirs @($vcpkgBin) `
-        -ArtifactsRoot $artifactsRoot `
-        -DependentsLog $dependentsLog `
-        -LayoutLog $layoutLog `
-        -IncludePdb:$includePdb
+    if (Test-Path (Join-Path $buildPath "meson-logs\meson-log.txt")) {
+        Copy-Item (Join-Path $buildPath "meson-logs\meson-log.txt") (Join-Path $logsDir "meson-log.txt") -Force
+    }
+    $dependentsLog = Join-Path $logsDir "dependents.log"
+    $layoutLog = Join-Path $logsDir "artifact-layout.log"
+    $runtimeSmokeLog = Join-Path $logsDir "runtime-smoke.log"
+    $runtimeRealSmokeLog = Join-Path $logsDir "runtime-real-smoke.log"
+    $pdbCheckLog = Join-Path $logsDir "pdb-check.log"
+    $xemuLog = Join-Path $logsDir "xemu.log"
+    $xemuLogSearchLog = Join-Path $logsDir "xemu-log-search.log"
+    $d8003MatchesLog = Join-Path $logsDir "missing-source-filename-matches.txt"
+    if (-not (Test-Path $dependentsLog)) { "not_run" | Set-Content -Path $dependentsLog }
+    if (-not (Test-Path $layoutLog)) { "not_run" | Set-Content -Path $layoutLog }
+    if (-not (Test-Path $runtimeSmokeLog)) { "not_run" | Set-Content -Path $runtimeSmokeLog }
+    if (-not (Test-Path $runtimeRealSmokeLog)) { "not_run" | Set-Content -Path $runtimeRealSmokeLog }
+    if (-not (Test-Path $pdbCheckLog)) { "not_run" | Set-Content -Path $pdbCheckLog }
+    if (-not (Test-Path $xemuLog)) { "not_run" | Set-Content -Path $xemuLog }
+    if (-not (Test-Path $xemuLogSearchLog)) { "not_run" | Set-Content -Path $xemuLogSearchLog }
+    if (-not (Test-Path $d8003MatchesLog)) { "not_run" | Set-Content -Path $d8003MatchesLog }
+} finally {
+    End-Phase "post-build log collection"
 }
-End-Phase "artifact packaging"
+
+if ($BuildScope -eq "full" -and $buildExit -eq 0) {
+    if ($finalExecutable) {
+        Start-Phase "artifact packaging"
+        try {
+            "" | Set-Content -Path $dependentsLog
+            "" | Set-Content -Path $layoutLog
+            $artifactConfigName = switch ($BuildConfig) {
+                "release" { "release" }
+                "debug" { "debug" }
+                default { "profile" }
+            }
+            $includePdb = $BuildConfig -ne "release"
+            $packagedArtifact = Copy-MsvcPackage `
+                -ConfigName $artifactConfigName `
+                -Executable $finalExecutable `
+                -Pdb $finalPdb `
+                -EmbeddedPdbNames $embeddedPdbNames `
+                -DependencyDirs @($vcpkgBin) `
+                -ArtifactsRoot $artifactsRoot `
+                -DependentsLog $dependentsLog `
+                -LayoutLog $layoutLog `
+                -IncludePdb:$includePdb
+        } finally {
+            End-Phase "artifact packaging"
+        }
+    } else {
+        Write-Warning "Build did not produce qemu-system-i386w.exe/xemu.exe; check build-output.log."
+        $buildExit = 1
+    }
+} else {
+    $buildExitForLog = if ($null -eq $buildExit) { "not_run" } else { $buildExit }
+    Write-Host "Skipping artifact packaging because build_scope=$BuildScope build_exit_code=$buildExitForLog."
+}
 
 if ($BuildScope -eq "full" -and $buildExit -eq 0 -and $packagedArtifact -ne "not_run") {
     Start-Phase "runtime version smoke test"
