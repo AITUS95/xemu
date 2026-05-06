@@ -90,6 +90,19 @@ The wrapper prepares local Python tools and standalone vcpkg when possible, then
 delegates to `scripts\ci\windows-msvc-probe.ps1`. It does not create a second
 build system.
 
+Normal local builds are incremental. The first build creates the selected
+Meson/Ninja build tree:
+
+- `Debug` -> `build-msvc-debug`
+- `Profile` -> `build-msvc-profile`
+- `Release` -> `build-msvc-release`
+
+Later builds reuse that build tree when the MSVC configuration marker still
+matches the selected architecture, QEMU CPU, build scope, vcpkg triplet,
+compiler, and configure arguments. The wrapper still runs `meson compile`, so
+Ninja decides which files need to be rebuilt. It never skips compilation just
+because `msvc-artifacts/<config>/xemu.exe` already exists.
+
 Useful local commands:
 
 ```powershell
@@ -104,19 +117,24 @@ Useful local commands:
 
 `-CheckOnly` verifies and prepares the local wrapper environment without
 configuring or compiling xemu. `-Rebuild` removes the selected configuration's
-generated outputs before building. `-Clean` removes generated build, artifact,
-and log outputs and exits.
+build tree and artifacts before building from zero. `-Clean` removes generated
+outputs for the selected configuration and exits. A plain build without
+`-Rebuild`, `-CleanIntermediates`, or `-CleanAll` preserves the build tree and
+is the path to use while editing source files.
 
 ## Cleanup
 
 Final runnable packages live in `msvc-artifacts/<config>`.
 
-Generated build trees and logs are intermediate data:
+Generated build trees are the state required for incremental local builds:
 
 - `build-msvc`
 - `build-msvc-debug`
 - `build-msvc-profile`
 - `build-msvc-release`
+
+Logs are regenerated on each build:
+
 - `msvc-probe-logs`
 - `xemu-msvc-logs`
 
@@ -129,9 +147,11 @@ Reusable caches speed up future builds:
 
 After a successful build, `-CleanIntermediates` removes build trees and logs but
 keeps `msvc-artifacts/<config>` and does not remove artifacts from other
-configurations. `-CleanAll` also removes reusable local caches, which saves disk
-space but makes the next build slower. `-KeepBuildTree` keeps the build tree for
-debugging even when cleanup switches are present.
+configurations. Use it only when you explicitly want to free disk space: the
+next build of that configuration must configure again and will not be fully
+incremental. `-CleanAll` also removes reusable local caches, which saves more
+disk space but makes the next build slower. `-KeepBuildTree` keeps the build
+tree for debugging even when cleanup switches are present.
 
 Cleanup never removes source files, tracked configuration files, Visual Studio
 JSON files, or runtime assets supplied by the user.
@@ -158,6 +178,9 @@ The accepted build scopes are:
 
 Use `-Strict` when CI-style validation should fail the script on missing required
 build outputs, invalid PDB state, or strict runtime-validation failures.
+The probe reuses an existing valid build tree when its generated
+`.msvc-build-config.json` marker matches the current configuration. Pass
+`-CleanBuild` to the probe only when intentionally discarding that build tree.
 
 ## Visual Studio Project
 
@@ -175,6 +198,11 @@ Then use the normal Build, Rebuild, or Clean commands. Visual Studio calls
 Python tools and standalone vcpkg automatically. Artifacts are written under
 `msvc-artifacts/<config>`.
 
+Visual Studio Build is incremental and preserves `build-msvc-<config>`.
+Visual Studio Rebuild passes `-Rebuild` and intentionally recreates only the
+selected configuration. Visual Studio Clean passes `-Clean` and removes only the
+selected configuration's generated outputs.
+
 ## Visual Studio Open Folder
 
 You can also use `File > Open > Folder` and select the cloned repository root.
@@ -191,6 +219,10 @@ The repository includes portable Open Folder configuration:
 
 For profiling, build `xemu MSVC Profile`, then launch or profile the `xemu MSVC
 Profile` target. It points to `msvc-artifacts/profile/xemu.exe`.
+
+The Open Folder Build Debug/Profile/Release tasks are incremental. Rebuild tasks
+are separate and pass `-Rebuild`. Clean tasks are available per configuration,
+with `xemu MSVC Clean All` kept as an explicit full generated-output cleanup.
 
 ## GitHub Actions
 

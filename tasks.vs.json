@@ -131,8 +131,65 @@
       ]
     },
     {
-      "taskLabel": "xemu MSVC Clean",
-      "taskName": "xemu MSVC Clean",
+      "taskLabel": "xemu MSVC Clean Debug",
+      "taskName": "xemu MSVC Clean Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean Profile",
+      "taskName": "xemu MSVC Clean Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean Release",
+      "taskName": "xemu MSVC Clean Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean All",
+      "taskName": "xemu MSVC Clean All",
       "appliesTo": "/",
       "type": "launch",
       "contextType": "clean",

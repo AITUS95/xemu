@@ -8,7 +8,8 @@ param(
     [string]$BuildConfig = "profile",
     [string]$VcpkgTriplet = "x64-windows",
     [string]$ExtraConfigureArgs = "",
-    [switch]$Strict
+    [switch]$Strict,
+    [switch]$CleanBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -962,6 +963,147 @@ function Get-StatusValue {
     return $line.Substring($Key.Length + 1)
 }
 
+function ConvertTo-CompressedJson {
+    param([object]$Value)
+
+    return ($Value | ConvertTo-Json -Depth 16 -Compress)
+}
+
+function Get-Sha256Text {
+    param([string]$Text)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        $hash = $sha.ComputeHash($bytes)
+        return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-OptionalFileSha256 {
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+        return "missing"
+    }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).Path)
+        $hash = $sha.ComputeHash($stream)
+        return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        if ($stream) {
+            $stream.Dispose()
+        }
+        $sha.Dispose()
+    }
+}
+
+function New-MsvcBuildConfigMarker {
+    param([object]$ConfigData)
+
+    $fingerprintInput = ConvertTo-CompressedJson -Value $ConfigData
+    return [ordered]@{
+        schema = 1
+        fingerprint = Get-Sha256Text -Text $fingerprintInput
+        generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+        config = $ConfigData
+    }
+}
+
+function Test-MesonBuildTree {
+    param([string]$BuildPath)
+
+    foreach ($relative in @(
+        "build.ninja",
+        "meson-info\meson-info.json",
+        "meson-private\coredata.dat"
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $BuildPath $relative))) {
+            return $false
+        }
+    }
+
+    try {
+        Get-Content -Raw -LiteralPath (Join-Path $BuildPath "meson-info\meson-info.json") |
+            ConvertFrom-Json | Out-Null
+    } catch {
+        return $false
+    }
+
+    return $true
+}
+
+function Get-MsvcBuildReuseDecision {
+    param(
+        [string]$BuildPath,
+        [string]$MarkerPath,
+        [string]$ExpectedFingerprint,
+        [switch]$CleanBuild
+    )
+
+    if ($CleanBuild) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "clean_build_requested" }
+    }
+    if (-not (Test-Path -LiteralPath $BuildPath)) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "build_dir_missing" }
+    }
+    if (-not (Test-MesonBuildTree -BuildPath $BuildPath)) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "meson_build_dir_invalid" }
+    }
+    if (-not (Test-Path -LiteralPath $MarkerPath)) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "config_marker_missing" }
+    }
+
+    try {
+        $marker = Get-Content -Raw -LiteralPath $MarkerPath | ConvertFrom-Json
+    } catch {
+        return [pscustomobject]@{ Reuse = $false; Reason = "config_marker_unreadable" }
+    }
+
+    if ([int]$marker.schema -ne 1) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "config_marker_schema_changed" }
+    }
+    if ($marker.fingerprint -ne $ExpectedFingerprint) {
+        return [pscustomobject]@{ Reuse = $false; Reason = "config_marker_changed" }
+    }
+
+    return [pscustomobject]@{ Reuse = $true; Reason = "config_marker_match" }
+}
+
+function Write-MsvcBuildConfigMarker {
+    param(
+        [string]$MarkerPath,
+        [object]$Marker
+    )
+
+    New-Item -ItemType Directory -Force -Path (Split-Path $MarkerPath -Parent) | Out-Null
+    $Marker | ConvertTo-Json -Depth 16 | Set-Content -Path $MarkerPath -Encoding ASCII
+}
+
+function Set-AsciiFileIfChanged {
+    param(
+        [string]$Path,
+        [string[]]$Lines
+    )
+
+    $content = ($Lines -join [Environment]::NewLine) + [Environment]::NewLine
+    if (Test-Path -LiteralPath $Path) {
+        $existing = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $Path).Path)
+        if ($existing -eq $content) {
+            return $false
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path $Path -Parent) | Out-Null
+    [System.IO.File]::WriteAllText($Path, $content, [System.Text.Encoding]::ASCII)
+    return $true
+}
+
 function Invoke-AllBuildConfigs {
     param(
         [string]$Architecture,
@@ -969,7 +1111,8 @@ function Invoke-AllBuildConfigs {
         [string]$BuildScope,
         [string]$VcpkgTriplet,
         [string]$ExtraConfigureArgs,
-        [switch]$Strict
+        [switch]$Strict,
+        [switch]$CleanBuild
     )
 
     if ($BuildScope -ne "full") {
@@ -1036,6 +1179,9 @@ function Invoke-AllBuildConfigs {
             if ($Strict) {
                 $childArgs += "-Strict"
             }
+            if ($CleanBuild) {
+                $childArgs += "-CleanBuild"
+            }
 
             & $powerShellHost @childArgs *> $consoleLog
             $childExit = $LASTEXITCODE
@@ -1063,6 +1209,7 @@ function Invoke-AllBuildConfigs {
         $configConfigureExit = Get-StatusValue -StatusPath $statusPath -Key "configure_exit_code"
         $configBuildExit = Get-StatusValue -StatusPath $statusPath -Key "build_exit_code"
         $statusLines += "$config.configure_exit_code=$configConfigureExit"
+        $statusLines += "$config.configure_reuse=$(Get-StatusValue -StatusPath $statusPath -Key "configure_reuse")"
         $statusLines += "$config.build_exit_code=$configBuildExit"
         $statusLines += "$config.pdb_reference_check=$(Get-StatusValue -StatusPath $statusPath -Key "pdb_reference_check")"
         $statusLines += "$config.cv2pdb_check=$(Get-StatusValue -StatusPath $statusPath -Key "cv2pdb_check")"
@@ -1143,6 +1290,7 @@ function Invoke-AllBuildConfigs {
 
     @(
         "configure_exit_code=$configureExitAggregate",
+        "configure_reuse=see_config_logs",
         "build_exit_code=$buildExitAggregate",
         "validation_exit_code=$validationExitAggregate"
     ) + $statusLines + @(
@@ -1182,7 +1330,8 @@ if ($BuildConfig -eq "all" -and -not $env:MSVC_PROBE_ALL_CHILD) {
         -BuildScope $BuildScope `
         -VcpkgTriplet $VcpkgTriplet `
         -ExtraConfigureArgs $ExtraConfigureArgs `
-        -Strict:$Strict
+        -Strict:$Strict `
+        -CleanBuild:$CleanBuild
 }
 
 $script:PhaseStart = @{}
@@ -1210,6 +1359,7 @@ $runtimeRealValidation = "not_run"
 $xemuLogStatus = "not_run"
 $laBbEndStatus = "not_run"
 $d8003Check = "not_run"
+$configureReuse = "not_run"
 $validationExit = 0
 $validationFailures = @()
 $packagedArtifact = "not_run"
@@ -1318,6 +1468,7 @@ End-Phase "vcpkg dependency install"
 if ($BuildScope -eq "deps") {
     @(
         "configure_exit_code=0",
+        "configure_reuse=not_run",
         "build_exit_code=0",
         "validation_exit_code=0",
         "build_scope=$BuildScope",
@@ -1402,19 +1553,9 @@ python -m mesonbuild.mesonmain --version 2>&1 | Tee-Object -FilePath (Join-Path 
 ninja --version 2>&1 | Tee-Object -FilePath (Join-Path $logsDir "ninja-version.log")
 End-Phase "python and meson tool setup"
 
-if (Test-Path $buildPath) {
-    Remove-Item -Recurse -Force $buildPath
-}
-New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
-
 $bash = $bashPath
 $wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
 $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
-@(
-    "@echo off",
-    "`"$pythonPath`" `"$wrapperPy`" `"$compilerPath`" %*",
-    "exit /b %ERRORLEVEL%"
-) | Set-Content -Path $localCompiler -Encoding ASCII
 $localCompilerMeson = ConvertTo-WindowsSlashPath $localCompiler
 $mesonOptimization = if ($BuildConfig -eq "debug") { "0" } else { "2" }
 
@@ -1478,18 +1619,88 @@ $configureCommand = @(
     $configureLine
 ) -join "; "
 
+$markerData = [ordered]@{
+    architecture = $Architecture
+    qemu_cpu = $QemuCpu
+    build_dir = $buildPathMeson
+    build_scope = $BuildScope
+    build_config = $BuildConfig
+    vcpkg_triplet = $VcpkgTriplet
+    compiler_command = $compilerCommand
+    compiler_path = $compilerPath
+    wrapper_script = ConvertTo-WindowsSlashPath $wrapperPy
+    pkg_config = $pkgConfigMeson
+    pkg_config_libdir = $pkgConfigLibdirMeson
+    meson_optimization = $mesonOptimization
+    configure_args = $configureArgs
+    extra_configure_args = $ExtraConfigureArgs
+    source_fingerprints = [ordered]@{
+        configure = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "configure")
+        meson_build = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "meson.build")
+        meson_options = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "meson_options.txt")
+        probe_script = Get-OptionalFileSha256 -Path $PSCommandPath
+        wrapper_script = Get-OptionalFileSha256 -Path $wrapperPy
+    }
+}
+$configMarker = New-MsvcBuildConfigMarker -ConfigData $markerData
+$configMarkerPath = Join-Path $buildPath ".msvc-build-config.json"
+$reuseDecision = Get-MsvcBuildReuseDecision `
+    -BuildPath $buildPath `
+    -MarkerPath $configMarkerPath `
+    -ExpectedFingerprint $configMarker.fingerprint `
+    -CleanBuild:$CleanBuild
+
+if ($reuseDecision.Reuse) {
+    Write-Host "Reusing existing Meson build directory: $buildPath"
+    Write-Host "Reuse reason: $($reuseDecision.Reason)"
+    $configureReuse = "reused"
+} else {
+    Write-Host "Preparing fresh Meson build directory: $buildPath"
+    Write-Host "Reason: $($reuseDecision.Reason)"
+    $configureReuse = "configured"
+    if (Test-Path -LiteralPath $buildPath) {
+        Remove-Item -LiteralPath $buildPath -Recurse -Force
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
+$wrapperChanged = Set-AsciiFileIfChanged -Path $localCompiler -Lines @(
+    "@echo off",
+    "`"$pythonPath`" `"$wrapperPy`" `"$compilerPath`" %*",
+    "exit /b %ERRORLEVEL%"
+)
+if ($wrapperChanged) {
+    Write-Host "MSVC compiler wrapper updated: $localCompiler"
+} else {
+    Write-Host "MSVC compiler wrapper unchanged: $localCompiler"
+}
+
 Push-Location $buildPath
 try {
     Start-Phase "meson setup"
-    Invoke-BashCommand -BashPath $bash -ScriptPath (Join-Path $buildPath "configure-msvc.sh") -Command $configureCommand
-    $configureExit = $script:LastCommandExitCode
-    if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $logsDir "configure-output.log"))) {
-        Write-Warning "Meson setup exited 0, but configure-output.log was not written."
-        $configureExit = 1
-    }
-    if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $buildPath "meson-info\meson-info.json"))) {
-        Write-Warning "Meson setup exited 0, but no valid Meson build directory was created."
-        $configureExit = 1
+    if ($reuseDecision.Reuse) {
+        @(
+            "configure_reuse=reused",
+            "reason=$($reuseDecision.Reason)",
+            "build_dir=$buildPath",
+            "marker=$configMarkerPath"
+        ) | Set-Content -Path (Join-Path $logsDir "configure-output.log") -Encoding ASCII
+        $configureExit = 0
+        Write-Host "Configure skipped: existing Meson/Ninja build tree is valid and configuration marker matches."
+    } else {
+        Invoke-BashCommand -BashPath $bash -ScriptPath (Join-Path $buildPath "configure-msvc.sh") -Command $configureCommand
+        $configureExit = $script:LastCommandExitCode
+        if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $logsDir "configure-output.log"))) {
+            Write-Warning "Meson setup exited 0, but configure-output.log was not written."
+            $configureExit = 1
+        }
+        if ($configureExit -eq 0 -and -not (Test-Path (Join-Path $buildPath "meson-info\meson-info.json"))) {
+            Write-Warning "Meson setup exited 0, but no valid Meson build directory was created."
+            $configureExit = 1
+        }
+        if ($configureExit -eq 0) {
+            Write-MsvcBuildConfigMarker -MarkerPath $configMarkerPath -Marker $configMarker
+        }
     }
     if ($configureExit -ne 0) {
         Write-LogSummary -Path (Join-Path $logsDir "configure-output.log") -Tail 150
@@ -1889,6 +2100,7 @@ if ($validationFailures) {
 
 @(
     "configure_exit_code=$configureExit",
+    "configure_reuse=$configureReuse",
     "build_exit_code=$(if ($null -eq $buildExit) { 'not_run' } else { $buildExit })",
     "validation_exit_code=$validationExit",
     "build_scope=$BuildScope",

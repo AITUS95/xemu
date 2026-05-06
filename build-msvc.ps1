@@ -431,6 +431,9 @@ function Invoke-MsvcProbe {
     if ($ExtraConfigureArgs) {
         $args += @("-ExtraConfigureArgs", $ExtraConfigureArgs)
     }
+    if ($Rebuild) {
+        $args += "-CleanBuild"
+    }
 
     Write-Step "Starting MSVC $ConfigName build"
     $oldErrorActionPreference = $ErrorActionPreference

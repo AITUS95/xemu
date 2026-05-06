@@ -428,6 +428,8 @@ def translate_args(args, compiler_name=""):
                     continue
                 skip_next = bool(append_linker_item(link, report, item))
             break
+        elif arg.startswith("/") and len(arg) > 1:
+            out.append(arg)
         elif arg.startswith("-"):
             warn_flag(report, arg)
             out.append(arg)
