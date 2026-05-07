@@ -48,6 +48,10 @@
 #include "tb-internal.h"
 #include "internal-common.h"
 
+#if defined(XBOX) && !defined(CONFIG_USER_ONLY)
+#define XBOX_TCG_DIRECT_TB_STATE 1
+#endif
+
 /* -icount align implementation. */
 
 typedef struct SyncClocks {
@@ -234,6 +238,81 @@ uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
 
     memcpy(&state_tag, &s->flags, sizeof(state_tag));
     return state_tag;
+#endif
+}
+
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+#define XBOX_I386_HF_CS64_MASK (1u << 15)
+#define XBOX_I386_R_CS 1
+
+typedef struct XboxI386SegmentCachePrefix {
+    uint32_t selector;
+    uint32_t base;
+    uint32_t limit;
+    uint32_t flags;
+} XboxI386SegmentCachePrefix;
+
+/*
+ * XBOX builds are i386-softmmu. Keep this prefix in sync with
+ * target/i386/cpu.h through the fields needed by x86_get_tb_cpu_state().
+ */
+typedef struct XboxI386CPUArchStatePrefix {
+    uint32_t regs[8];
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t cc_dst;
+    uint32_t cc_src;
+    uint32_t cc_src2;
+    uint32_t cc_op;
+    int32_t df;
+    uint32_t hflags;
+    uint32_t hflags2;
+    XboxI386SegmentCachePrefix segs[6];
+} XboxI386CPUArchStatePrefix;
+
+static inline __attribute__((always_inline))
+uint64_t tb_jmp_cache_state_tag_parts(uint32_t flags, uint32_t cflags)
+{
+    return flags | ((uint64_t)cflags << 32);
+}
+
+static inline __attribute__((always_inline))
+void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
+                                uint32_t *flags, uint64_t *cs_base)
+{
+    const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
+    uint32_t hflags = xenv->hflags;
+    vaddr eip = xenv->eip;
+
+    *flags = hflags;
+    if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
+        *pc = eip;
+        *cs_base = 0;
+    } else {
+        uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
+
+        *pc = (uint32_t)(base + eip);
+        *cs_base = base;
+    }
+}
+#endif
+
+static inline __attribute__((always_inline))
+TCGTBCPUState tcg_get_tb_cpu_state(CPUState *cpu)
+{
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    vaddr pc;
+    uint32_t flags;
+    uint64_t cs_base;
+
+    xbox_get_tb_cpu_state_fast(cpu_env(cpu), &pc, &flags, &cs_base);
+    return (TCGTBCPUState){
+        .pc = pc,
+        .flags = flags,
+        .cs_base = cs_base,
+    };
+#else
+    return cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
 #endif
 }
 
@@ -446,6 +525,65 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
         check_for_breakpoints_slow(cpu, pc, cflags);
 }
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static const void *__attribute__((noinline))
+xbox_lookup_tb_ptr_log(vaddr pc, CPUState *cpu, const TranslationBlock *tb)
+{
+    log_cpu_exec(pc, cpu, tb);
+    return tb->tc.ptr;
+}
+
+static const void *__attribute__((noinline))
+xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
+                        uint64_t state_tag)
+{
+    uint32_t flags = state_tag;
+    uint32_t cflags = state_tag >> 32;
+    uint32_t hash = tb_jmp_cache_hash_func(pc);
+    TCGTBCPUState s = {
+        .pc = pc,
+        .flags = flags,
+        .cflags = cflags,
+        .cs_base = cs_base,
+    };
+    TranslationBlock *tb = tb_lookup_slow(cpu, s, hash, state_tag);
+
+    if (tb == NULL) {
+        return tcg_code_gen_epilogue;
+    }
+    if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
+        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
+    }
+    return tb->tc.ptr;
+}
+
+static const void *__attribute__((noinline))
+xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
+                               uint64_t state_tag)
+{
+    uint32_t flags = state_tag;
+    uint32_t cflags = state_tag >> 32;
+    uint32_t hash;
+    TranslationBlock *tb;
+
+    if (check_for_breakpoints_slow(cpu, pc, &cflags)) {
+        cpu_loop_exit(cpu);
+    }
+
+    hash = tb_jmp_cache_hash_func(pc);
+    state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
+
+    tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
+    if (tb == NULL) {
+        return xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+    }
+    if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
+        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
+    }
+    return tb->tc.ptr;
+}
+#endif
+
 /**
  * helper_lookup_tb_ptr: quick check for next tb
  * @env: current cpu state
@@ -468,7 +606,36 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
      */
     cpu->neg.can_do_io = true;
 
-    TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    vaddr pc;
+    uint32_t flags;
+    uint32_t cflags;
+    uint64_t cs_base;
+    uint64_t state_tag;
+    uint32_t hash;
+
+    xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base);
+    cflags = curr_cflags(cpu);
+    state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
+
+    if (unlikely(!QTAILQ_EMPTY(&cpu->breakpoints))) {
+        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, state_tag);
+    }
+
+    hash = tb_jmp_cache_hash_func(pc);
+
+    tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
+    if (unlikely(tb == NULL)) {
+        return xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+    }
+
+    if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC))) {
+        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
+    }
+
+    return tb->tc.ptr;
+#else
+    TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
     s.cflags = curr_cflags(cpu);
 
     if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
@@ -493,6 +660,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     }
 
     return tb->tc.ptr;
+#endif
 }
 
 /* Return the current PC from CPU, which may be cached in TB. */
@@ -665,7 +833,7 @@ void cpu_exec_step_atomic(CPUState *cpu)
         g_assert(!cpu->running);
         cpu->running = true;
 
-        TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+        TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
         s.cflags = curr_cflags(cpu);
 
         /* Execute in a serial context. */
@@ -1054,7 +1222,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
         while (!cpu_handle_interrupt(cpu, &last_tb)) {
             TranslationBlock *tb;
-            TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+            TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
             s.cflags = cpu->cflags_next_tb;
 
             /*

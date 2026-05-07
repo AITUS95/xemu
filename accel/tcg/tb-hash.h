@@ -36,21 +36,37 @@
 #define TB_JMP_ADDR_MASK (TB_JMP_PAGE_SIZE - 1)
 #define TB_JMP_PAGE_MASK (TB_JMP_CACHE_SIZE - TB_JMP_PAGE_SIZE)
 
+#ifdef XBOX
+/*
+ * xemu's XBOX build is i386-softmmu, so the target page size is fixed at
+ * 4 KiB. Keep this constant to avoid a target_page.bits load on TB lookups.
+ */
+#define TB_JMP_TARGET_PAGE_BITS 12
+typedef uint32_t tb_jmp_cache_vaddr_t;
+#else
+#define TB_JMP_TARGET_PAGE_BITS TARGET_PAGE_BITS
+typedef vaddr tb_jmp_cache_vaddr_t;
+#endif
+
+#define TB_JMP_PAGE_SHIFT (TB_JMP_TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)
+
 static inline __attribute__((always_inline))
 unsigned int tb_jmp_cache_hash_page(vaddr pc)
 {
-    vaddr tmp;
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
+    tb_jmp_cache_vaddr_t tmp = pc;
+
+    tmp ^= tmp >> TB_JMP_PAGE_SHIFT;
+    return (tmp >> TB_JMP_PAGE_SHIFT) & TB_JMP_PAGE_MASK;
 }
 
 static inline __attribute__((always_inline))
 unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
-    vaddr tmp;
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
-           | (tmp & TB_JMP_ADDR_MASK));
+    tb_jmp_cache_vaddr_t tmp = pc;
+
+    tmp ^= tmp >> TB_JMP_PAGE_SHIFT;
+    return ((tmp >> TB_JMP_PAGE_SHIFT) & TB_JMP_PAGE_MASK) |
+           (tmp & TB_JMP_ADDR_MASK);
 }
 
 #else

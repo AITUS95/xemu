@@ -837,7 +837,14 @@ extern int64_t clock_freq;
 static inline int64_t get_clock(void)
 {
     LARGE_INTEGER ti;
+
     QueryPerformanceCounter(&ti);
+    if (likely(clock_freq == 10000000)) {
+        return ti.QuadPart * 100;
+    }
+    if (clock_freq == NANOSECONDS_PER_SECOND) {
+        return ti.QuadPart;
+    }
     return muldiv64(ti.QuadPart, NANOSECONDS_PER_SECOND, clock_freq);
 }
 
