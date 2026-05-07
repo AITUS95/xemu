@@ -1073,7 +1073,14 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
      * cpu->interrupt_request (see also store-release in
      * tcg_kick_vcpu_thread())
      */
+#ifdef XBOX
+    if (unlikely(icount_enabled()) ||
+        unlikely(qatomic_read(&cpu->neg.icount_decr.u16.high))) {
+        qatomic_set_mb(&cpu->neg.icount_decr.u16.high, 0);
+    }
+#else
     qatomic_set_mb(&cpu->neg.icount_decr.u16.high, 0);
+#endif
 
 #ifdef CONFIG_USER_ONLY
     assert(!cpu_test_interrupt(cpu, ~0));
