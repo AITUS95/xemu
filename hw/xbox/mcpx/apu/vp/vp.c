@@ -1126,9 +1126,9 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
     return sample_count;
 }
 
-static bool voice_linear_pull_sample(MCPXAPUState *d, uint16_t v,
-                                     MCPXAPUVoiceFilter *filter,
-                                     float sample[2])
+static inline __attribute__((always_inline))
+bool voice_linear_pull_sample(MCPXAPUState *d, uint16_t v,
+                              MCPXAPUVoiceFilter *filter, float sample[2])
 {
     float (*input_buf)[2] = (float (*)[2])filter->resample_buf;
 
