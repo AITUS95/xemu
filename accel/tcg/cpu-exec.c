@@ -533,7 +533,7 @@ xbox_lookup_tb_ptr_log(vaddr pc, CPUState *cpu, const TranslationBlock *tb)
     return tb->tc.ptr;
 }
 
-static const void *__attribute__((noinline))
+static inline __attribute__((always_inline)) TranslationBlock *
 xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
                         uint64_t state_tag)
 {
@@ -546,20 +546,13 @@ xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
         .cflags = cflags,
         .cs_base = cs_base,
     };
-    TranslationBlock *tb = tb_lookup_slow(cpu, s, hash, state_tag);
 
-    if (tb == NULL) {
-        return tcg_code_gen_epilogue;
-    }
-    if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
-        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
-    }
-    return tb->tc.ptr;
+    return tb_lookup_slow(cpu, s, hash, state_tag);
 }
 
 static const void *__attribute__((noinline))
 xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
-                               uint64_t state_tag)
+                               uint64_t state_tag, bool log_tb)
 {
     uint32_t flags = state_tag;
     uint32_t cflags = state_tag >> 32;
@@ -575,9 +568,12 @@ xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
 
     tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (tb == NULL) {
-        return xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        if (tb == NULL) {
+            return tcg_code_gen_epilogue;
+        }
     }
-    if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
+    if (log_tb) {
         return xbox_lookup_tb_ptr_log(pc, cpu, tb);
     }
     return tb->tc.ptr;
@@ -613,23 +609,29 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint64_t cs_base;
     uint64_t state_tag;
     uint32_t hash;
+    bool log_tb;
 
     xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base);
     cflags = curr_cflags(cpu);
     state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
+    log_tb = unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC));
 
     if (unlikely(!QTAILQ_EMPTY(&cpu->breakpoints))) {
-        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, state_tag);
+        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, state_tag,
+                                             log_tb);
     }
 
     hash = tb_jmp_cache_hash_func(pc);
 
     tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (unlikely(tb == NULL)) {
-        return xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        if (tb == NULL) {
+            return tcg_code_gen_epilogue;
+        }
     }
 
-    if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC))) {
+    if (log_tb) {
         return xbox_lookup_tb_ptr_log(pc, cpu, tb);
     }
 
