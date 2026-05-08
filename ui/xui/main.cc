@@ -322,6 +322,18 @@ void xemu_hud_update(void)
     // if (show_demo) ImGui::ShowDemoWindow(&show_demo);
 }
 
+static void SetSwapInterval(bool vsync)
+{
+    if (!vsync) {
+        SDL_GL_SetSwapInterval(0);
+        return;
+    }
+
+    if (!SDL_GL_SetSwapInterval(-1)) {
+        SDL_GL_SetSwapInterval(1);
+    }
+}
+
 void xemu_hud_render()
 {
     ImGui::Render();
@@ -329,7 +341,7 @@ void xemu_hud_render()
 
     if (g_vsync != g_config.display.window.vsync) {
         g_vsync = g_config.display.window.vsync;
-        SDL_GL_SetSwapInterval(g_vsync ? 1 : 0);
+        SetSwapInterval(g_vsync);
     }
 
     if (g_screenshot_pending) {

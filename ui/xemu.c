@@ -796,6 +796,41 @@ static void report_stats(void)
 }
 #endif
 
+static void xemu_set_swap_interval(bool vsync)
+{
+    if (!vsync) {
+        SDL_GL_SetSwapInterval(0);
+        return;
+    }
+
+    if (!SDL_GL_SetSwapInterval(-1)) {
+        SDL_GL_SetSwapInterval(1);
+    }
+}
+
+static int64_t get_render_throttle_interval_ns(struct xemu_console *scon)
+{
+    if (!g_config.display.window.vsync) {
+        return vblank_interval_ns;
+    }
+
+    SDL_DisplayID display = SDL_GetDisplayForWindow(scon->real_window);
+    const SDL_DisplayMode *mode =
+        display ? SDL_GetCurrentDisplayMode(display) : NULL;
+
+    if (!mode || mode->refresh_rate <= 0) {
+        return 0;
+    }
+
+    double host_interval_ns = 1000000000.0 / mode->refresh_rate;
+
+    if (host_interval_ns < (double)vblank_interval_ns * 0.90) {
+        return vblank_interval_ns;
+    }
+
+    return 0;
+}
+
 /**
  * Renders the main interface. Usually called from the main thread,
  * but may sometimes be called from another thread.
@@ -1095,7 +1130,7 @@ static void display_early_init(DisplayOptions *o)
     display_opengl = 1;
 
     SDL_GL_MakeCurrent(m_window, m_context);
-    SDL_GL_SetSwapInterval(g_config.display.window.vsync ? 1 : 0);
+    xemu_set_swap_interval(g_config.display.window.vsync);
     xemu_hud_init(m_window, m_context);
 }
 
@@ -1368,9 +1403,37 @@ int main(int argc, char **argv)
     xemu_main_loop_unlock();
 
     struct xemu_console *scon = &scon_list[0];
+    int64_t next_render_ns = 0;
+
     while (!qatomic_read(&qemu_exiting)) {
         poll_events(scon);
+
+        int64_t render_interval_ns = get_render_throttle_interval_ns(scon);
+        if (render_interval_ns > 0) {
+            int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+
+            if (!next_render_ns) {
+                next_render_ns = now;
+            }
+
+            if (now < next_render_ns) {
+                SDL_DelayPrecise(next_render_ns - now);
+                continue;
+            }
+        } else {
+            next_render_ns = 0;
+        }
+
         gl_render_frame(scon);
+
+        if (render_interval_ns > 0) {
+            int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            if (now > next_render_ns + render_interval_ns) {
+                next_render_ns = now + render_interval_ns;
+            } else {
+                next_render_ns += render_interval_ns;
+            }
+        }
     }
     qemu_sem_post(&display_shutdown_sem);
     qemu_thread_join(&thread);
