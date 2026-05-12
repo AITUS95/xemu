@@ -297,6 +297,7 @@ void qemu_thread_exit(void *arg)
         g_free(data);
     }
     _endthreadex(0);
+    abort();
 }
 
 void *qemu_thread_join(QemuThread *thread)

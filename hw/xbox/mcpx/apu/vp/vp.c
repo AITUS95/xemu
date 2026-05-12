@@ -1084,6 +1084,7 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                     break;
                 default:
                     assert(false);
+                    abort();
                     break;
                 }
                 samples[sample_count][channel] = fval;

@@ -83,6 +83,7 @@ static enum S3TC_DECOMPRESS_FORMAT kelvin_format_to_s3tc_format(int color_format
         return S3TC_DECOMPRESS_FORMAT_DXT5;
     default:
         assert(false);
+        abort();
     }
 }
 

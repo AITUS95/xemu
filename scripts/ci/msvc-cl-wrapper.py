@@ -35,6 +35,19 @@ SAFE_IGNORED_FLAGS = {
     "-pthread",
 }
 
+CLANG_CL_SAFE_IGNORED_FLAGS = {
+    "-fchar8_t",
+    "-fmax-errors=5",
+    "/zc:externconstexpr",
+    "/zc:preprocessor",
+    "/zc:throwingnew",
+}
+
+CLANG_CL_SOURCE_WARNING_SUPPRESSIONS = {
+    "subprojects/imgui/imgui.cpp": ["-Wno-unused-function"],
+    "subprojects/tomlplusplus/src/toml.cpp": ["-Wno-deprecated-literal-operator"],
+}
+
 DANGEROUS_FLAGS = {
     "-m32",
     "-nostdlib",
@@ -192,6 +205,22 @@ def append_std_flag(out, value, compiler_name=""):
 
 def is_cxx_source(path):
     return Path(path).suffix in CXX_SOURCE_SUFFIXES
+
+
+def append_source_warning_suppressions(out, report, source_inputs, compiler_name):
+    if not compiler_name.startswith("clang-cl"):
+        return
+
+    normalized_sources = [
+        source.replace("\\", "/").lower()
+        for source in source_inputs
+    ]
+    for suffix, warnings in CLANG_CL_SOURCE_WARNING_SUPPRESSIONS.items():
+        if not any(source.endswith(suffix) for source in normalized_sources):
+            continue
+        for warning in warnings:
+            append_translated_once(out, report, f"<source:{suffix}>",
+                                   "/clang:" + warning)
 
 
 def append_translated(out, report, source, *values):
@@ -363,6 +392,8 @@ def translate_args(args, compiler_name=""):
             if i + 1 < len(args):
                 i += 1
                 out.append(args[i])
+        elif compiler_name.startswith("clang-cl") and lower_arg in CLANG_CL_SAFE_IGNORED_FLAGS:
+            ignore_flag(report, arg)
         elif arg in KNOWN_PASSTHROUGH_FLAGS:
             out.append(arg)
         elif arg == "-fpermissive":
@@ -407,7 +438,10 @@ def translate_args(args, compiler_name=""):
                     continue
                 skip_next = bool(append_linker_item(link, report, item))
         elif arg.startswith("-W"):
-            ignore_flag(report, arg)
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:" + arg)
+            else:
+                ignore_flag(report, arg)
         elif arg.startswith("-l") and len(arg) > 2:
             append_linker_item(link, report, arg)
         elif arg == "-L":
@@ -449,6 +483,8 @@ def translate_args(args, compiler_name=""):
         flag.lower().startswith("/std:c++") for flag in out
     ):
         append_translated_once(out, report, "<cxx-default>", "/EHsc")
+
+    append_source_warning_suppressions(out, report, source_inputs, compiler_name)
 
     if not compile_only and not preprocess_only and not assemble_only:
         out.append("/link")

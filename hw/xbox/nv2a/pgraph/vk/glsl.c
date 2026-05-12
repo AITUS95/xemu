@@ -586,6 +586,7 @@ static glslang_stage_t vk_shader_stage_to_glslang_stage(VkShaderStageFlagBits st
         return GLSLANG_STAGE_COMPUTE;
     default:
         assert(0);
+        abort();
     }
 }
 

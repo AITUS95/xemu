@@ -1374,6 +1374,7 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
         break;
     default:
         assert(0);
+        abort();
         break;
     }
 

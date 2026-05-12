@@ -404,6 +404,12 @@ elif host_os == 'sunos'
 elif host_os == 'haiku'
   qemu_common_flags += ['-DB_USE_POSITIVE_POSIX_ERRORS', '-D_BSD_SOURCE', '-fPIC']
 elif host_os == 'windows'
+  qemu_common_flags += [
+    '-D_CRT_NONSTDC_NO_DEPRECATE',
+    '-D_CRT_SECURE_NO_DEPRECATE',
+    '-D_CRT_SECURE_NO_WARNINGS',
+    '-D_WINSOCK_DEPRECATED_NO_WARNINGS',
+  ]
   # plugins use delaylib, and clang needs to be used with lld to make it work.
   if compiler.get_id() == 'clang' and compiler.get_linker_id() not in ['ld.lld', 'link', 'lld-link']
     error('On windows, you need to use lld with clang - use msys2 clang64/clangarm64 env')
@@ -778,6 +784,16 @@ warn_flags = [
   '-Wno-tautological-type-limit-compare',
   '-Wno-typedef-redefinition',
 ]
+
+if host_os == 'windows'
+  warn_flags += [
+    '-Wno-deprecated-literal-operator',
+    '-Wno-deprecated-non-prototype',
+    '-Wno-extern-c-compat',
+    '-Wno-nullability-completeness',
+    '-Wno-tautological-constant-out-of-range-compare',
+  ]
+endif
 
 if host_os != 'darwin'
   tsa_has_cleanup = cc.compiles('''
@@ -2456,6 +2472,9 @@ if vulkan.found()
     # FIXME: Get spirv-tools to enable opt.
     glslang_opts = cmake.subproject_options()
     glslang_opts.add_cmake_defines({'ENABLE_OPT': false, 'ENABLE_HLSL': false})
+    if host_os == 'windows'
+      glslang_opts.append_compile_args('cpp', '-Wno-unused-but-set-variable')
+    endif
     glslang_subpro = cmake.subproject('glslang', options: glslang_opts)
     libglslang = declare_dependency(link_with: [
           glslang_subpro.target('glslang'),
@@ -2487,6 +2506,7 @@ endif
 
 if host_os == 'windows'
   libpcap = declare_dependency(include_directories: 'winpcap-loader/include',
+                               compile_args: ['-Wno-strict-prototypes'],
                                link_args: ['-lws2_32'])
 else
   libpcap = dependency('libpcap', method: 'pkg-config', required: true)

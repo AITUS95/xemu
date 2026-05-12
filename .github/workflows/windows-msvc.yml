@@ -51,7 +51,7 @@ permissions:
 jobs:
   deps:
     name: MSVC dependencies (x64)
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     timeout-minutes: 60
     steps:
       - name: Clone tree
@@ -151,7 +151,7 @@ jobs:
   build:
     name: MSVC ${{ matrix.build_config }} (${{ matrix.arch }})
     needs: deps
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     timeout-minutes: 60
     strategy:
       fail-fast: false

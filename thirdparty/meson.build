@@ -6,6 +6,10 @@ vma_defns = [
     '-DVMA_STATIC_VULKAN_FUNCTIONS=0',
     '-DVMA_DYNAMIC_VULKAN_FUNCTIONS=0',
     ]
+vma_cpp_args = vma_defns
+if host_os == 'windows'
+    vma_cpp_args += ['-Wno-unused-variable']
+endif
 
 if debug_vma
     vma_defns += [
@@ -18,7 +22,7 @@ endif
 vma_subproj = cmake.subproject('VulkanMemoryAllocator')
 libvma = static_library('vma',
                         sources: 'vma.cc',
-                        cpp_args: vma_defns,
+                        cpp_args: vma_cpp_args,
                         include_directories: vma_subproj.include_directories('VulkanMemoryAllocator'),
                         dependencies: [vulkan, volk])
 vma = declare_dependency(include_directories: vma_subproj.include_directories('VulkanMemoryAllocator'),

@@ -64,22 +64,23 @@ function Import-VisualStudioEnvironment {
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere)) {
-        throw "vswhere.exe was not found. Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ workload."
+        throw "vswhere.exe was not found. Install Visual Studio 2026 or Build Tools for Visual Studio 2026 with the C++ workload."
     }
 
-    $installPath = & $vswhere -latest -products * `
+    $vs2026Range = "[18.0,19.0)"
+    $installPath = & $vswhere -latest -version $vs2026Range -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang `
         -property installationPath
 
     if (-not $installPath) {
-        $installPath = & $vswhere -latest -products * `
+        $installPath = & $vswhere -latest -version $vs2026Range -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath
     }
 
     if (-not $installPath) {
-        throw "Visual Studio C++ tools were not found. Install the MSVC x64/x86 build tools component."
+        throw "Visual Studio 2026 C++ tools were not found. Install Visual Studio 2026 or Build Tools for Visual Studio 2026 with the MSVC x64/x86 build tools component."
     }
 
     $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvarsall.bat"

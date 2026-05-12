@@ -425,6 +425,7 @@ static MString* get_input_var(struct PixelShader *ps, struct InputInfo in, bool 
         break;
     default:
         assert(false);
+        abort();
         break;
     }
 
@@ -457,6 +458,7 @@ static MString* get_output(MString *reg, int mapping)
         break;
     default:
         assert(false);
+        abort();
         break;
     }
     return res;

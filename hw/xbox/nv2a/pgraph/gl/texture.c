@@ -418,6 +418,7 @@ gl_internal_format_to_s3tc_enum(GLint gl_internal_format)
         return S3TC_DECOMPRESS_FORMAT_DXT5;
     default:
         assert(!"Invalid format");
+        abort();
     }
 }
 
@@ -665,6 +666,7 @@ static TextureBinding* generate_texture(const TextureShape s,
             case 3: gl_target = GL_TEXTURE_3D; break;
             default:
                 assert(false);
+                abort();
                 break;
             }
         }

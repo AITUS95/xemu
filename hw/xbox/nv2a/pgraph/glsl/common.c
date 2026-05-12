@@ -78,6 +78,7 @@ void pgraph_glsl_set_clip_range_uniform_value(PGRAPHState *pg, float clipRange[4
         break;
     default:
         assert(0);
+        abort();
     }
 
     uint32_t zclip_min = pgraph_reg_r(pg, NV_PGRAPH_ZCLIPMIN);

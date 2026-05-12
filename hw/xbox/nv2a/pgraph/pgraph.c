@@ -1122,6 +1122,7 @@ DEF_METHOD(NV097, SET_FOG_MODE)
         mode = NV_PGRAPH_CONTROL_3_FOG_MODE_LINEAR_ABS; break;
     default:
         assert(false);
+        abort();
         break;
     }
     PG_SET_MASK(NV_PGRAPH_CONTROL_3, NV_PGRAPH_CONTROL_3_FOG_MODE,
@@ -1144,6 +1145,7 @@ DEF_METHOD(NV097, SET_FOG_GEN_MODE)
         mode = NV_PGRAPH_CSV0_D_FOGGENMODE_FOG_X; break;
     default:
         assert(false);
+        abort();
         break;
     }
     PG_SET_MASK(NV_PGRAPH_CSV0_D, NV_PGRAPH_CSV0_D_FOGGENMODE, mode);
@@ -1491,6 +1493,7 @@ static unsigned int kelvin_map_stencil_op(uint32_t parameter)
         op = NV_PGRAPH_CONTROL_2_STENCIL_OP_V_DECR; break;
     default:
         assert(false);
+        abort();
         break;
     }
     return op;
@@ -1563,6 +1566,7 @@ static unsigned int kelvin_map_polygon_mode(uint32_t parameter)
         mode = NV_PGRAPH_SETUPRASTER_FRONTFACEMODE_FILL; break;
     default:
         assert(false);
+        abort();
         break;
     }
     return mode;
@@ -1604,6 +1608,7 @@ DEF_METHOD(NV097, SET_CULL_FACE)
         face = NV_PGRAPH_SETUPRASTER_CULLCTRL_FRONT_AND_BACK; break;
     default:
         assert(false);
+        abort();
         break;
     }
     PG_SET_MASK(NV_PGRAPH_SETUPRASTER, NV_PGRAPH_SETUPRASTER_CULLCTRL, face);
@@ -1676,6 +1681,7 @@ static unsigned int kelvin_map_texgen(uint32_t parameter, unsigned int channel)
         texgen = NV_PGRAPH_CSV1_A_T0_S_NORMAL_MAP; break;
     default:
         assert(false);
+        abort();
         break;
     }
     return texgen;

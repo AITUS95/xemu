@@ -179,8 +179,15 @@ int qemu_ftruncate64(int fd, int64_t length)
     HANDLE h;
     BOOL res;
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
     if ((GetVersion() & 0x80000000UL) && (length >> 32) != 0)
         return -1;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
     h = (HANDLE)_get_osfhandle(fd);
 

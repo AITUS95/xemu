@@ -40,7 +40,7 @@ PDB generation; full runtime validation is a separate manual step.
 
 Install these manually before building on Windows:
 
-- Visual Studio 2022 or Build Tools for Visual Studio with the C++ x64 tools.
+- Visual Studio 2026 or Build Tools for Visual Studio 2026 with the C++ x64 tools.
 - C++ Clang tools for Windows, providing `clang-cl.exe`.
 - Windows SDK, providing `rc.exe` and `midl.exe`.
 - Git for Windows, providing `git.exe`, `bash.exe`, and `sh.exe`.
@@ -226,8 +226,9 @@ with `xemu MSVC Clean All` kept as an explicit full generated-output cleanup.
 
 ## GitHub Actions
 
-The Windows MSVC workflow has one dependency warm-up job and parallel
-Debug/Profile/Release build jobs. The dependency job warms the standalone vcpkg
+The Windows MSVC workflow targets GitHub's `windows-2025-vs2026` image, with
+one dependency warm-up job and parallel Debug/Profile/Release build jobs. The
+dependency job warms the standalone vcpkg
 tool, downloads, binary cache, and package cache with a stable cache key based on
 the files that actually affect dependencies. The build jobs restore that cache
 and then run in parallel.
@@ -241,7 +242,7 @@ should spend much less time in `vcpkg dependency install`. Inspect
 
 `Visual Studio C++ tools were not found`
 
-Install Visual Studio 2022 or Build Tools for Visual Studio with the C++ x64
+Install Visual Studio 2026 or Build Tools for Visual Studio 2026 with the C++ x64
 toolchain.
 
 `clang-cl.exe was not found`

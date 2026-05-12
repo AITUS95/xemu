@@ -202,6 +202,7 @@ void pgraph_vk_transition_image_layout(PGRAPHState *pg, VkCommandBuffer cmd,
 
     } else {
         assert(!"unsupported layout transition!");
+        abort();
     }
 
     vkCmdPipelineBarrier(cmd, sourceStage, destinationStage, 0, 0,
