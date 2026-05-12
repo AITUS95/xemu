@@ -321,7 +321,7 @@ int qemu_timeout_ns_to_ms(int64_t ns)
 
 #if defined(XBOX) && !defined(CONFIG_PPOLL)
 #define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
-#define XBOX_BUSYWAIT_SPIN_NS 50000
+#define XBOX_BUSYWAIT_SPIN_NS 30000
 #define XBOX_100NS_PER_SECOND 10000000LL
 
 #ifdef _WIN32
