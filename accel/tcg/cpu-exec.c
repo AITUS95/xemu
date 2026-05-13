@@ -332,8 +332,8 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
 #ifdef XBOX_TCG_DIRECT_TB_STATE
-    if (unlikely(jce->addr_tag != xbox_tb_jmp_cache_addr_tag(pc, cs_base) ||
-                 jce->state_tag != state_tag)) {
+    if (unlikely(jce->state_tag != state_tag ||
+                 jce->addr_tag != xbox_tb_jmp_cache_addr_tag(pc, cs_base))) {
         return NULL;
     }
 #else
