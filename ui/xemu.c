@@ -31,6 +31,7 @@
 #include "qemu/module.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
+#include "qemu/timer.h"
 #include "qemu/rcu.h"
 #include "qemu-version.h"
 #include "qapi/error.h"
@@ -72,6 +73,29 @@
 
 uint64_t vblank_interval_ns = 16666666LL;
 bool use_vblank_timer_thread = true;
+
+#define XEMU_PRECISE_DELAY_TAIL_NS (2 * SCALE_MS)
+
+static void xemu_delay_until_ns(int64_t deadline_ns)
+{
+    int64_t now_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    int64_t delay_ns = deadline_ns - now_ns;
+
+    if (delay_ns <= 0) {
+        return;
+    }
+
+    if (delay_ns > XEMU_PRECISE_DELAY_TAIL_NS + SCALE_MS) {
+        uint64_t coarse_ms = (delay_ns - XEMU_PRECISE_DELAY_TAIL_NS) / SCALE_MS;
+
+        SDL_Delay((uint32_t)MIN(coarse_ms, UINT32_MAX));
+    }
+
+    now_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (now_ns < deadline_ns) {
+        SDL_DelayPrecise(deadline_ns - now_ns);
+    }
+}
 
 struct xemu_console {
     DisplayChangeListener dcl;
@@ -759,7 +783,7 @@ static void *vblank_timer_thread(void *opaque)
         // Wait until deadline
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         if (now < next_vblank) {
-            SDL_DelayPrecise(next_vblank - now);
+            xemu_delay_until_ns(next_vblank);
         } else if (now > next_vblank + vblank_interval_ns) {
             // We've fallen behind by more than one frame, reset to avoid
             // rapid-fire catch-up
@@ -1417,7 +1441,7 @@ int main(int argc, char **argv)
             }
 
             if (now < next_render_ns) {
-                SDL_DelayPrecise(next_render_ns - now);
+                xemu_delay_until_ns(next_render_ns);
                 continue;
             }
         } else {
