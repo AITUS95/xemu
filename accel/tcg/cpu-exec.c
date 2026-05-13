@@ -287,7 +287,8 @@ uint64_t xbox_tb_jmp_cache_addr_tag(vaddr pc, uint64_t cs_base)
 
 static inline __attribute__((always_inline))
 void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
-                                uint32_t *flags, uint64_t *cs_base)
+                                uint32_t *flags, uint64_t *cs_base,
+                                uint64_t *addr_tag)
 {
     const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
     uint32_t hflags = xenv->hflags;
@@ -297,11 +298,19 @@ void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
     if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
         *pc = eip;
         *cs_base = 0;
+        if (addr_tag) {
+            tcg_debug_assert(eip == (uint32_t)eip);
+            *addr_tag = (uint32_t)eip;
+        }
     } else {
         uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
+        uint32_t pc32 = base + eip;
 
-        *pc = (uint32_t)(base + eip);
+        *pc = pc32;
         *cs_base = base;
+        if (addr_tag) {
+            *addr_tag = pc32 | ((uint64_t)base << 32);
+        }
     }
 }
 #endif
@@ -314,7 +323,7 @@ TCGTBCPUState tcg_get_tb_cpu_state(CPUState *cpu)
     uint32_t flags;
     uint64_t cs_base;
 
-    xbox_get_tb_cpu_state_fast(cpu_env(cpu), &pc, &flags, &cs_base);
+    xbox_get_tb_cpu_state_fast(cpu_env(cpu), &pc, &flags, &cs_base, NULL);
     return (TCGTBCPUState){
         .pc = pc,
         .flags = flags,
@@ -353,6 +362,23 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
      */
     return qatomic_read(&jce->tb);
 }
+
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static inline __attribute__((always_inline)) TranslationBlock *
+tb_jmp_cache_lookup_tag(CPUState *cpu, uint64_t addr_tag,
+                        uint64_t state_tag, uint32_t hash)
+{
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    if (unlikely(jce->addr_tag != addr_tag ||
+                 jce->state_tag != state_tag)) {
+        return NULL;
+    }
+
+    return qatomic_read(&jce->tb);
+}
+#endif
 
 static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
                                       vaddr pc, uint64_t cs_base,
@@ -627,11 +653,12 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint32_t flags;
     uint32_t cflags;
     uint64_t cs_base;
+    uint64_t addr_tag;
     uint64_t state_tag;
     uint32_t hash;
     bool log_tb;
 
-    xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base);
+    xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base, &addr_tag);
     cflags = curr_cflags(cpu);
     state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
     log_tb = unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC));
@@ -643,7 +670,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 
     hash = tb_jmp_cache_hash_func(pc);
 
-    tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
+    tb = tb_jmp_cache_lookup_tag(cpu, addr_tag, state_tag, hash);
     if (unlikely(tb == NULL)) {
         tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
         if (tb == NULL) {
