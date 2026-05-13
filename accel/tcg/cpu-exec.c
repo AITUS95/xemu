@@ -277,6 +277,15 @@ uint64_t tb_jmp_cache_state_tag_parts(uint32_t flags, uint32_t cflags)
 }
 
 static inline __attribute__((always_inline))
+uint64_t xbox_tb_jmp_cache_addr_tag(vaddr pc, uint64_t cs_base)
+{
+    tcg_debug_assert(pc == (uint32_t)pc);
+    tcg_debug_assert(cs_base == (uint32_t)cs_base);
+
+    return (uint32_t)pc | (cs_base << 32);
+}
+
+static inline __attribute__((always_inline))
 void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
                                 uint32_t *flags, uint64_t *cs_base)
 {
@@ -325,11 +334,18 @@ static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    if (unlikely(jce->addr_tag != xbox_tb_jmp_cache_addr_tag(pc, cs_base) ||
+                 jce->state_tag != state_tag)) {
+        return NULL;
+    }
+#else
     if (unlikely(jce->pc != pc ||
                  jce->cs_base != cs_base ||
                  jce->state_tag != state_tag)) {
         return NULL;
     }
+#endif
 
     /*
      * Invalidations clear only tb. Keep the pointer load last so a metadata
@@ -346,8 +362,12 @@ static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    jce->addr_tag = xbox_tb_jmp_cache_addr_tag(pc, cs_base);
+#else
     jce->pc = pc;
     jce->cs_base = cs_base;
+#endif
     jce->state_tag = state_tag;
     qatomic_set(&jce->tb, tb);
 }
