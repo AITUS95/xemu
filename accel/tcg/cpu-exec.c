@@ -1296,7 +1296,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
              * direct jump to a TB spanning two pages because the mapping
              * for the second page can change.
              */
-            if (last_tb && tb_page_addr1(tb) != -1) {
+            if (tb_page_addr1(tb) != -1) {
                 last_tb = NULL;
             }
 #endif
