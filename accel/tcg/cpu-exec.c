@@ -279,10 +279,7 @@ uint64_t tb_jmp_cache_state_tag_parts(uint32_t flags, uint32_t cflags)
 static inline __attribute__((always_inline))
 uint64_t xbox_tb_jmp_cache_addr_tag(vaddr pc, uint64_t cs_base)
 {
-    tcg_debug_assert(pc == (uint32_t)pc);
-    tcg_debug_assert(cs_base == (uint32_t)cs_base);
-
-    return (uint32_t)pc | (cs_base << 32);
+    return (uint32_t)pc | ((uint64_t)(uint32_t)cs_base << 32);
 }
 
 static inline __attribute__((always_inline))
