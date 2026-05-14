@@ -1639,11 +1639,23 @@ static void *voice_worker_thread(void *arg)
         int64_t end_time = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
         g_dbg.vp.workers[worker_id].time_us = end_time - start_time;
 
-        qemu_cond_wait(&vwd->work_pending, &vwd->lock);
+        qemu_cond_wait(&self->work_pending, &vwd->lock);
     } while (!vwd->workers_should_exit);
 
     rcu_unregister_thread();
     return NULL;
+}
+
+static void voice_work_signal_pending_workers(VoiceWorkDispatch *vwd)
+{
+    uint64_t workers_pending = vwd->workers_pending;
+
+    while (workers_pending) {
+        int worker_id = ctz64(workers_pending);
+
+        workers_pending &= workers_pending - 1;
+        qemu_cond_signal(&vwd->workers[worker_id].work_pending);
+    }
 }
 
 static void voice_work_enqueue(MCPXAPUState *d, int v, int list)
@@ -1747,7 +1759,7 @@ voice_work_dispatch(MCPXAPUState *d,
 
         // Signal workers and wait for completion
         voice_work_schedule(d);
-        qemu_cond_broadcast(&vwd->work_pending);
+        voice_work_signal_pending_workers(vwd);
         qemu_cond_wait(&vwd->work_finished, &vwd->lock);
         assert(!vwd->workers_pending);
         vwd->queue_len = 0;
@@ -1784,9 +1796,9 @@ static void voice_work_init(MCPXAPUState *d)
 
     qemu_mutex_init(&vwd->lock);
     qemu_mutex_lock(&vwd->lock);
-    qemu_cond_init(&vwd->work_pending);
     qemu_cond_init(&vwd->work_finished);
     for (int i = 0; i < vwd->num_workers; i++) {
+        qemu_cond_init(&vwd->workers[i].work_pending);
         vwd->workers_pending |= 1 << i;
         qemu_thread_create(&vwd->workers[i].thread, "mcpx.voice_worker",
                            voice_worker_thread, d, QEMU_THREAD_JOINABLE);
@@ -1802,10 +1814,13 @@ static void voice_work_finalize(MCPXAPUState *d)
 
     qemu_mutex_lock(&vwd->lock);
     vwd->workers_should_exit = true;
-    qemu_cond_broadcast(&vwd->work_pending);
+    for (int i = 0; i < vwd->num_workers; i++) {
+        qemu_cond_signal(&vwd->workers[i].work_pending);
+    }
     qemu_mutex_unlock(&vwd->lock);
     for (int i = 0; i < vwd->num_workers; i++) {
         qemu_thread_join(&vwd->workers[i].thread);
+        qemu_cond_destroy(&vwd->workers[i].work_pending);
     }
     g_free(vwd->workers);
     vwd->workers = NULL;
