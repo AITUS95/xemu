@@ -24,6 +24,7 @@ on:
       - "util/**"
       - "meson.build"
       - "meson_options.txt"
+      - "os-win32.c"
       - "subprojects/**"
       - "winpcap-loader/**"
       - "config_spec.yml"
