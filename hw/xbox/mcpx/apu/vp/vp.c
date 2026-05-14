@@ -1584,11 +1584,6 @@ static void get_voice_bin_src_dst(MCPXAPUState *d, int v,
     }
 }
 
-static void voice_worker_process(MCPXAPUState *d, VoiceWorker *worker);
-static void voice_worker_add_contributions(MCPXAPUState *d,
-                                           VoiceWorkDispatch *vwd,
-                                           VoiceWorker *worker);
-
 static void *voice_worker_thread(void *arg)
 {
     MCPXAPUState *d = arg;
@@ -1609,12 +1604,31 @@ static void *voice_worker_thread(void *arg)
             qemu_mutex_unlock(&vwd->lock);
 
             // Process queued voices
-            voice_worker_process(d, self);
+            memset(self->mixbins, 0, sizeof(self->mixbins));
+            if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
+                memset(self->sample_buf, 0, sizeof(self->sample_buf));
+            }
+            for (int i = 0; i < self->queue_len; i++) {
+                voice_process(d, self->mixbins, self->sample_buf,
+                              self->queue[i].voice, self->queue[i].list);
+            }
 
             qemu_mutex_lock(&vwd->lock);
 
             // Add voice contributions
-            voice_worker_add_contributions(d, vwd, self);
+            for (int b = 0; b < NUM_MIXBINS; b++) {
+                for (int s = 0; s < NUM_SAMPLES_PER_FRAME; s++) {
+                    vwd->mixbins[b][s] += self->mixbins[b][s];
+                }
+            }
+            if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
+                for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
+                    d->vp.sample_buf[i][0] += self->sample_buf[i][0];
+                    d->vp.sample_buf[i][1] += self->sample_buf[i][1];
+                }
+            }
+
+            self->queue_len = 0;
         }
 
         vwd->workers_pending &= ~(1 << worker_id);
@@ -1630,36 +1644,6 @@ static void *voice_worker_thread(void *arg)
 
     rcu_unregister_thread();
     return NULL;
-}
-
-static void voice_worker_process(MCPXAPUState *d, VoiceWorker *worker)
-{
-    memset(worker->mixbins, 0, sizeof(worker->mixbins));
-    if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
-        memset(worker->sample_buf, 0, sizeof(worker->sample_buf));
-    }
-    for (int i = 0; i < worker->queue_len; i++) {
-        voice_process(d, worker->mixbins, worker->sample_buf,
-                      worker->queue[i].voice, worker->queue[i].list);
-    }
-}
-
-static void voice_worker_add_contributions(MCPXAPUState *d,
-                                           VoiceWorkDispatch *vwd,
-                                           VoiceWorker *worker)
-{
-    for (int b = 0; b < NUM_MIXBINS; b++) {
-        for (int s = 0; s < NUM_SAMPLES_PER_FRAME; s++) {
-            vwd->mixbins[b][s] += worker->mixbins[b][s];
-        }
-    }
-    if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {
-        for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            d->vp.sample_buf[i][0] += worker->sample_buf[i][0];
-            d->vp.sample_buf[i][1] += worker->sample_buf[i][1];
-        }
-    }
-    worker->queue_len = 0;
 }
 
 static void voice_work_signal_pending_workers(VoiceWorkDispatch *vwd)
@@ -1792,25 +1776,8 @@ voice_work_dispatch(MCPXAPUState *d,
 
         // Signal workers and wait for completion
         voice_work_schedule(d);
-        if ((vwd->workers_pending & (vwd->workers_pending - 1)) == 0) {
-            int worker_id = ctz64(vwd->workers_pending);
-            VoiceWorker *worker = &vwd->workers[worker_id];
-            int64_t worker_start_time = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
-
-            g_dbg.vp.workers[worker_id].num_voices = worker->queue_len;
-            qemu_mutex_unlock(&vwd->lock);
-            voice_worker_process(d, worker);
-            qemu_mutex_lock(&vwd->lock);
-            voice_worker_add_contributions(d, vwd, worker);
-            vwd->workers_pending = 0;
-
-            int64_t worker_end_time = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
-            g_dbg.vp.workers[worker_id].time_us =
-                worker_end_time - worker_start_time;
-        } else {
-            voice_work_signal_pending_workers(vwd);
-            qemu_cond_wait(&vwd->work_finished, &vwd->lock);
-        }
+        voice_work_signal_pending_workers(vwd);
+        qemu_cond_wait(&vwd->work_finished, &vwd->lock);
         assert(!vwd->workers_pending);
         vwd->queue_len = 0;
 
