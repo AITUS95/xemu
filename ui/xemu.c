@@ -74,7 +74,7 @@
 uint64_t vblank_interval_ns = 16666666LL;
 bool use_vblank_timer_thread = true;
 
-#define XEMU_PRECISE_DELAY_TAIL_NS SCALE_MS
+#define XEMU_PRECISE_DELAY_TAIL_NS (2 * SCALE_MS)
 
 static void xemu_delay_until_ns(int64_t deadline_ns)
 {
