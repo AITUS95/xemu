@@ -22,7 +22,7 @@
 #include "hw/xbox/mcpx/apu/apu_int.h"
 #include "adpcm.h"
 
-#define DEFAULT_VOICE_WORKERS 2
+#define DEFAULT_VOICE_WORKERS 1
 
 static const struct {
     hwaddr top, current, next;
