@@ -41,17 +41,30 @@ static BOOL WINAPI qemu_ctrl_handler(DWORD type)
 }
 
 static TIMECAPS mm_tc;
+static bool timer_resolution_active;
 
 static void os_undo_timer_resolution(void)
 {
-    timeEndPeriod(mm_tc.wPeriodMin);
+    if (timer_resolution_active) {
+        timeEndPeriod(mm_tc.wPeriodMin);
+    }
 }
 
 void os_setup_early_signal_handling(void)
 {
+    const char *high_timer_resolution;
+
     SetConsoleCtrlHandler(qemu_ctrl_handler, TRUE);
-    timeGetDevCaps(&mm_tc, sizeof(mm_tc));
-    timeBeginPeriod(mm_tc.wPeriodMin);
+
+    high_timer_resolution = getenv("XEMU_WIN32_HIGH_TIMER_RESOLUTION");
+    if (high_timer_resolution &&
+        high_timer_resolution[0] &&
+        strcmp(high_timer_resolution, "0")) {
+        timeGetDevCaps(&mm_tc, sizeof(mm_tc));
+        timer_resolution_active =
+            timeBeginPeriod(mm_tc.wPeriodMin) == TIMERR_NOERROR;
+    }
+
     atexit(os_undo_timer_resolution);
 }
 
