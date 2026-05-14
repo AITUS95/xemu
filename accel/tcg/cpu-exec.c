@@ -1065,9 +1065,6 @@ void tcg_kick_vcpu_thread(CPUState *cpu)
 
 static inline bool icount_exit_request(CPUState *cpu)
 {
-    if (!icount_enabled()) {
-        return false;
-    }
     if (cpu->cflags_next_tb != -1 && !(cpu->cflags_next_tb & CF_USE_ICOUNT)) {
         return false;
     }
@@ -1075,7 +1072,8 @@ static inline bool icount_exit_request(CPUState *cpu)
 }
 
 static inline bool cpu_handle_interrupt(CPUState *cpu,
-                                        TranslationBlock **last_tb)
+                                        TranslationBlock **last_tb,
+                                        bool icount_enabled_for_run)
 {
     /*
      * If we have requested custom cflags with CF_NOIRQ we should
@@ -1093,7 +1091,7 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
      * tcg_kick_vcpu_thread())
      */
 #ifdef XBOX
-    if (unlikely(icount_enabled()) ||
+    if (unlikely(icount_enabled_for_run) ||
         unlikely(qatomic_read(&cpu->neg.icount_decr.u16.high))) {
         qatomic_set_mb(&cpu->neg.icount_decr.u16.high, 0);
     }
@@ -1190,7 +1188,8 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
      * Finally, check if we need to exit to the main loop.
      * The corresponding store-release is in cpu_exit.
      */
-    if (unlikely(qatomic_load_acquire(&cpu->exit_request)) || icount_exit_request(cpu)) {
+    if (unlikely(qatomic_load_acquire(&cpu->exit_request)) ||
+        (unlikely(icount_enabled_for_run) && icount_exit_request(cpu))) {
         if (cpu->exception_index == -1) {
             cpu->exception_index = EXCP_INTERRUPT;
         }
@@ -1252,13 +1251,14 @@ static int __attribute__((noinline))
 cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 {
     int ret;
+    bool icount_enabled_for_run = icount_enabled();
 
     /* if an exception is pending, we execute it here */
     while (!cpu_handle_exception(cpu, &ret)) {
         TranslationBlock *last_tb = NULL;
         int tb_exit = 0;
 
-        while (!cpu_handle_interrupt(cpu, &last_tb)) {
+        while (!cpu_handle_interrupt(cpu, &last_tb, icount_enabled_for_run)) {
             TranslationBlock *tb;
             TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
             s.cflags = cpu->cflags_next_tb;
