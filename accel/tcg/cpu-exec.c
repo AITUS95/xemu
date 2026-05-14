@@ -52,11 +52,6 @@
 #define XBOX_TCG_DIRECT_TB_STATE 1
 #endif
 
-#if defined(XBOX) && !defined(CONFIG_USER_ONLY)
-#define XBOX_CPU_INTERRUPT_BQL_MASK \
-    (CPU_INTERRUPT_DEBUG | CPU_INTERRUPT_HALT | CPU_INTERRUPT_RESET)
-#endif
-
 /* -icount align implementation. */
 
 typedef struct SyncClocks {
@@ -1109,25 +1104,8 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
 #ifdef CONFIG_USER_ONLY
     assert(!cpu_test_interrupt(cpu, ~0));
 #else
-    int interrupt_request = qatomic_load_acquire(&cpu->interrupt_request);
-
-#ifdef XBOX
-    if (unlikely(interrupt_request & CPU_INTERRUPT_EXITTB)) {
-        cpu_reset_interrupt(cpu, CPU_INTERRUPT_EXITTB);
-        *last_tb = NULL;
-        interrupt_request &= ~CPU_INTERRUPT_EXITTB;
-    }
-
-    if (unlikely(interrupt_request) &&
-        likely(!(interrupt_request & XBOX_CPU_INTERRUPT_BQL_MASK)) &&
-        likely(!cpu_has_work(cpu))) {
-        interrupt_request = 0;
-    }
-#endif
-
-    if (unlikely(interrupt_request)) {
+    if (unlikely(cpu_test_interrupt(cpu, ~0))) {
         bql_lock();
-        interrupt_request = cpu->interrupt_request;
         if (cpu_test_interrupt(cpu, CPU_INTERRUPT_DEBUG)) {
             cpu_reset_interrupt(cpu, CPU_INTERRUPT_DEBUG);
             cpu->exception_index = EXCP_DEBUG;
@@ -1145,6 +1123,7 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
             return true;
         } else {
             const TCGCPUOps *tcg_ops = cpu->cc->tcg_ops;
+            int interrupt_request = cpu->interrupt_request;
 
             if (cpu_test_interrupt(cpu, CPU_INTERRUPT_RESET)) {
                 replay_interrupt();
