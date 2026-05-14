@@ -12,7 +12,11 @@
 #include "qemu/rcu.h"
 #include "exec/cpu-common.h"
 
+#if defined(XBOX) && !defined(CONFIG_USER_ONLY)
+#define TB_JMP_CACHE_BITS 13
+#else
 #define TB_JMP_CACHE_BITS 12
+#endif
 #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
 
 /*
