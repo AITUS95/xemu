@@ -22,6 +22,8 @@
 #include "hw/xbox/mcpx/apu/apu_int.h"
 #include "adpcm.h"
 
+#define DEFAULT_VOICE_WORKERS 4
+
 static const struct {
     hwaddr top, current, next;
 } voice_list_regs[] = {
@@ -1768,7 +1770,10 @@ static void voice_work_init(MCPXAPUState *d)
 {
     VoiceWorkDispatch *vwd = &d->vp.voice_work_dispatch;
 
-    int num_workers = g_config.audio.vp.num_workers ?: SDL_GetNumLogicalCPUCores();
+    int num_workers = g_config.audio.vp.num_workers;
+    if (!num_workers) {
+        num_workers = MIN(SDL_GetNumLogicalCPUCores(), DEFAULT_VOICE_WORKERS);
+    }
     vwd->num_workers = MAX(1, MIN(num_workers, MAX_VOICE_WORKERS));
     vwd->workers = g_malloc0_n(vwd->num_workers, sizeof(VoiceWorker));
     vwd->workers_should_exit = false;
