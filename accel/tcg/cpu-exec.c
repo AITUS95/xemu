@@ -1104,6 +1104,18 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
 #ifdef CONFIG_USER_ONLY
     assert(!cpu_test_interrupt(cpu, ~0));
 #else
+#ifdef XBOX
+    /*
+     * EXITTB only invalidates the current TB chaining state.  Handle it
+     * before taking the BQL so pure chaining exits do not contend with the
+     * iothread.
+     */
+    if (unlikely(cpu_test_interrupt(cpu, CPU_INTERRUPT_EXITTB))) {
+        cpu_reset_interrupt(cpu, CPU_INTERRUPT_EXITTB);
+        *last_tb = NULL;
+    }
+#endif
+
     if (unlikely(cpu_test_interrupt(cpu, ~0))) {
         bql_lock();
         if (cpu_test_interrupt(cpu, CPU_INTERRUPT_DEBUG)) {
