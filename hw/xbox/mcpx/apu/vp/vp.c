@@ -1658,6 +1658,14 @@ static void voice_work_signal_pending_workers(VoiceWorkDispatch *vwd)
     }
 }
 
+static void voice_work_dispatch_inline(MCPXAPUState *d,
+                                       float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME],
+                                       VoiceWorkItem item)
+{
+    g_dbg.vp.workers[0].num_voices = 1;
+    voice_process(d, mixbins, d->vp.sample_buf, item.voice, item.list);
+}
+
 static void voice_work_enqueue(MCPXAPUState *d, int v, int list)
 {
     VoiceWorkDispatch *vwd = &d->vp.voice_work_dispatch;
@@ -1755,6 +1763,15 @@ voice_work_dispatch(MCPXAPUState *d,
     qemu_mutex_lock(&vwd->lock);
 
     if (vwd->queue_len) {
+        if (vwd->queue_len == 1) {
+            VoiceWorkItem item = vwd->queue[0];
+
+            vwd->queue_len = 0;
+            qemu_mutex_unlock(&vwd->lock);
+            voice_work_dispatch_inline(d, mixbins, item);
+            goto done;
+        }
+
         memset(vwd->mixbins, 0, sizeof(vwd->mixbins));
 
         // Signal workers and wait for completion
@@ -1772,10 +1789,11 @@ voice_work_dispatch(MCPXAPUState *d,
         }
     }
 
+    qemu_mutex_unlock(&vwd->lock);
+
+done:
     int64_t end_time = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
     g_dbg.vp.total_worker_time_us = end_time - start_time;
-
-    qemu_mutex_unlock(&vwd->lock);
 }
 
 static void voice_work_init(MCPXAPUState *d)
