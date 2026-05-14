@@ -242,7 +242,6 @@ uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
 }
 
 #ifdef XBOX_TCG_DIRECT_TB_STATE
-#define XBOX_I386_HF_CS64_MASK (1u << 15)
 #define XBOX_I386_R_CS 1
 
 typedef struct XboxI386SegmentCachePrefix {
@@ -289,17 +288,11 @@ void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
     const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
     uint32_t hflags = xenv->hflags;
     vaddr eip = xenv->eip;
+    uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
 
     *flags = hflags;
-    if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
-        *pc = eip;
-        *cs_base = 0;
-    } else {
-        uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
-
-        *pc = (uint32_t)(base + eip);
-        *cs_base = base;
-    }
+    *pc = (uint32_t)(base + eip);
+    *cs_base = base;
 }
 #endif
 
@@ -552,11 +545,10 @@ xbox_lookup_tb_ptr_log(vaddr pc, CPUState *cpu, const TranslationBlock *tb)
 
 static inline __attribute__((always_inline)) TranslationBlock *
 xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
-                        uint64_t state_tag)
+                        uint64_t state_tag, uint32_t hash)
 {
     uint32_t flags = state_tag;
     uint32_t cflags = state_tag >> 32;
-    uint32_t hash = tb_jmp_cache_hash_func(pc);
     TCGTBCPUState s = {
         .pc = pc,
         .flags = flags,
@@ -585,7 +577,7 @@ xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
 
     tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (tb == NULL) {
-        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag, hash);
         if (tb == NULL) {
             return tcg_code_gen_epilogue;
         }
@@ -642,7 +634,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 
     tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (unlikely(tb == NULL)) {
-        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag, hash);
         if (tb == NULL) {
             return tcg_code_gen_epilogue;
         }
