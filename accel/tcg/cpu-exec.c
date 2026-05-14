@@ -242,6 +242,7 @@ uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
 }
 
 #ifdef XBOX_TCG_DIRECT_TB_STATE
+#define XBOX_I386_HF_CS64_MASK (1u << 15)
 #define XBOX_I386_R_CS 1
 
 typedef struct XboxI386SegmentCachePrefix {
@@ -282,31 +283,23 @@ uint64_t xbox_tb_jmp_cache_addr_tag(vaddr pc, uint64_t cs_base)
 }
 
 static inline __attribute__((always_inline))
-void xbox_get_tb_jmp_cache_state_fast(CPUArchState *env, vaddr *pc,
-                                      uint32_t *flags, uint64_t *addr_tag)
-{
-    const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
-    uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
-    uint32_t linear_pc = base + xenv->eip;
-
-    /*
-     * XBOX builds are i386-softmmu. Avoid the generic x86_64 CS64 branch in
-     * the TB lookup fast path and produce the packed jump-cache address tag
-     * directly for the common cache-hit path.
-     */
-    *pc = linear_pc;
-    *flags = xenv->hflags;
-    *addr_tag = xbox_tb_jmp_cache_addr_tag(linear_pc, base);
-}
-
-static inline __attribute__((always_inline))
 void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
                                 uint32_t *flags, uint64_t *cs_base)
 {
-    uint64_t addr_tag;
+    const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
+    uint32_t hflags = xenv->hflags;
+    vaddr eip = xenv->eip;
 
-    xbox_get_tb_jmp_cache_state_fast(env, pc, flags, &addr_tag);
-    *cs_base = addr_tag >> 32;
+    *flags = hflags;
+    if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
+        *pc = eip;
+        *cs_base = 0;
+    } else {
+        uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
+
+        *pc = (uint32_t)(base + eip);
+        *cs_base = base;
+    }
 }
 #endif
 
@@ -329,9 +322,11 @@ TCGTBCPUState tcg_get_tb_cpu_state(CPUState *cpu)
 #endif
 }
 
-static inline TranslationBlock *
-tb_jmp_cache_lookup(CPUState *cpu, vaddr pc, uint64_t cs_base,
-                    uint64_t state_tag, uint32_t hash)
+static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
+                                                    vaddr pc,
+                                                    uint64_t cs_base,
+                                                    uint64_t state_tag,
+                                                    uint32_t hash)
 {
     CPUJumpCache *jc = cpu->tb_jmp_cache;
     typeof(jc->array[0]) *jce = &jc->array[hash];
@@ -356,23 +351,6 @@ tb_jmp_cache_lookup(CPUState *cpu, vaddr pc, uint64_t cs_base,
     return qatomic_read(&jce->tb);
 }
 
-#ifdef XBOX_TCG_DIRECT_TB_STATE
-static inline TranslationBlock *
-tb_jmp_cache_lookup_addr_tag(CPUState *cpu, uint64_t addr_tag,
-                             uint64_t state_tag, uint32_t hash)
-{
-    CPUJumpCache *jc = cpu->tb_jmp_cache;
-    typeof(jc->array[0]) *jce = &jc->array[hash];
-
-    if (unlikely(jce->addr_tag != addr_tag ||
-                 jce->state_tag != state_tag)) {
-        return NULL;
-    }
-
-    return qatomic_read(&jce->tb);
-}
-#endif
-
 static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
                                       vaddr pc, uint64_t cs_base,
                                       uint64_t state_tag,
@@ -391,21 +369,6 @@ static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
     qatomic_set(&jce->tb, tb);
 }
 
-#ifdef XBOX_TCG_DIRECT_TB_STATE
-static inline void tb_jmp_cache_store_addr_tag(CPUState *cpu, uint32_t hash,
-                                               uint64_t addr_tag,
-                                               uint64_t state_tag,
-                                               TranslationBlock *tb)
-{
-    CPUJumpCache *jc = cpu->tb_jmp_cache;
-    typeof(jc->array[0]) *jce = &jc->array[hash];
-
-    jce->addr_tag = addr_tag;
-    jce->state_tag = state_tag;
-    qatomic_set(&jce->tb, tb);
-}
-#endif
-
 static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
                                                uint32_t hash,
                                                uint64_t state_tag)
@@ -419,22 +382,6 @@ static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
     tb_jmp_cache_store(cpu, hash, s.pc, s.cs_base, state_tag, tb);
     return tb;
 }
-
-#ifdef XBOX_TCG_DIRECT_TB_STATE
-static inline TranslationBlock *
-tb_lookup_slow_addr_tag(CPUState *cpu, TCGTBCPUState s, uint32_t hash,
-                        uint64_t state_tag, uint64_t addr_tag)
-{
-    TranslationBlock *tb = tb_htable_lookup(cpu, s);
-
-    if (tb == NULL) {
-        return NULL;
-    }
-
-    tb_jmp_cache_store_addr_tag(cpu, hash, addr_tag, state_tag, tb);
-    return tb;
-}
-#endif
 
 static bool inv_tb_lookup_cmp(const void *p, const void *d)
 {
@@ -475,25 +422,12 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 
     hash = tb_jmp_cache_hash_func(s.pc);
     state_tag = tb_jmp_cache_state_tag(&s);
-#ifdef XBOX_TCG_DIRECT_TB_STATE
-    {
-        uint64_t addr_tag = xbox_tb_jmp_cache_addr_tag(s.pc, s.cs_base);
-
-        tb = tb_jmp_cache_lookup_addr_tag(cpu, addr_tag, state_tag, hash);
-        if (likely(tb)) {
-            goto hit;
-        }
-
-        tb = tb_lookup_slow_addr_tag(cpu, s, hash, state_tag, addr_tag);
-    }
-#else
     tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
     if (likely(tb)) {
         goto hit;
     }
 
     tb = tb_lookup_slow(cpu, s, hash, state_tag);
-#endif
     if (unlikely(tb == NULL)) {
         return NULL;
     }
@@ -617,13 +551,12 @@ xbox_lookup_tb_ptr_log(vaddr pc, CPUState *cpu, const TranslationBlock *tb)
 }
 
 static inline __attribute__((always_inline)) TranslationBlock *
-xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t addr_tag,
+xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
                         uint64_t state_tag)
 {
     uint32_t flags = state_tag;
     uint32_t cflags = state_tag >> 32;
     uint32_t hash = tb_jmp_cache_hash_func(pc);
-    uint64_t cs_base = addr_tag >> 32;
     TCGTBCPUState s = {
         .pc = pc,
         .flags = flags,
@@ -631,11 +564,11 @@ xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t addr_tag,
         .cs_base = cs_base,
     };
 
-    return tb_lookup_slow_addr_tag(cpu, s, hash, state_tag, addr_tag);
+    return tb_lookup_slow(cpu, s, hash, state_tag);
 }
 
 static const void *__attribute__((noinline))
-xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t addr_tag,
+xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
                                uint64_t state_tag, bool log_tb)
 {
     uint32_t flags = state_tag;
@@ -650,9 +583,9 @@ xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t addr_tag,
     hash = tb_jmp_cache_hash_func(pc);
     state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
 
-    tb = tb_jmp_cache_lookup_addr_tag(cpu, addr_tag, state_tag, hash);
+    tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (tb == NULL) {
-        tb = xbox_lookup_tb_ptr_miss(cpu, pc, addr_tag, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
         if (tb == NULL) {
             return tcg_code_gen_epilogue;
         }
@@ -690,26 +623,26 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     vaddr pc;
     uint32_t flags;
     uint32_t cflags;
-    uint64_t addr_tag;
+    uint64_t cs_base;
     uint64_t state_tag;
     uint32_t hash;
     bool log_tb;
 
-    xbox_get_tb_jmp_cache_state_fast(env, &pc, &flags, &addr_tag);
+    xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base);
     cflags = curr_cflags(cpu);
     state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
     log_tb = unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC));
 
     if (unlikely(!QTAILQ_EMPTY(&cpu->breakpoints))) {
-        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, addr_tag, state_tag,
-                                              log_tb);
+        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, state_tag,
+                                             log_tb);
     }
 
     hash = tb_jmp_cache_hash_func(pc);
 
-    tb = tb_jmp_cache_lookup_addr_tag(cpu, addr_tag, state_tag, hash);
+    tb = tb_jmp_cache_lookup(cpu, pc, cs_base, state_tag, hash);
     if (unlikely(tb == NULL)) {
-        tb = xbox_lookup_tb_ptr_miss(cpu, pc, addr_tag, state_tag);
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, state_tag);
         if (tb == NULL) {
             return tcg_code_gen_epilogue;
         }
