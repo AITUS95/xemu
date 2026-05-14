@@ -626,16 +626,15 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     uint64_t cs_base;
     uint64_t state_tag;
     uint32_t hash;
-    bool log_tb;
 
     xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base);
     cflags = curr_cflags(cpu);
     state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
-    log_tb = unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC));
 
     if (unlikely(!QTAILQ_EMPTY(&cpu->breakpoints))) {
         return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, state_tag,
-                                             log_tb);
+                                             qemu_loglevel_mask(CPU_LOG_TB_CPU |
+                                                                CPU_LOG_EXEC));
     }
 
     hash = tb_jmp_cache_hash_func(pc);
@@ -648,7 +647,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
         }
     }
 
-    if (log_tb) {
+    if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC))) {
         return xbox_lookup_tb_ptr_log(pc, cpu, tb);
     }
 
