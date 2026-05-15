@@ -147,7 +147,11 @@ static float get_texture_uniform_scale(PGRAPHVkState *r, int texture_idx)
         return 1.0f;
     }
 
-    return binding->key.scale;
+    float scale = binding->key.scale;
+    BasicColorFormatInfo f_basic =
+        kelvin_color_format_info_map[binding->key.state.color_format];
+
+    return f_basic.linear ? scale : 1.0f;
 }
 
 static void init_descriptor_set_state(PGRAPHVkState *r,
