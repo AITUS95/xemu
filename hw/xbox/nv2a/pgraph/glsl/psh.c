@@ -1406,18 +1406,23 @@ static MString* psh_convert(struct PixelShader *ps)
 
             if (ps->state->rect_tex[i]) {
                 mstring_append_fmt(preflight,
-                "vec2 norm%d(vec2 coord) {\n"
-                "    return coord / (textureSize(texSamp%d, 0) / texScale[%d]);\n"
+                "vec2 norm%dSize() {\n"
+                "    return vec2(textureSize(texSamp%d, 0)) / texScale[%d];\n"
                 "}\n",
                 i, i, i);
                 mstring_append_fmt(preflight,
+                "vec2 norm%d(vec2 coord) {\n"
+                "    return (coord + vec2(0.5)) / norm%dSize();\n"
+                "}\n",
+                i, i);
+                mstring_append_fmt(preflight,
                 "vec3 norm%d(vec3 coord) {\n"
-                "    return vec3(norm%d(coord.xy), coord.z);\n"
+                "    return vec3((coord.xy + vec2(0.5) * coord.z) / norm%dSize(), coord.z);\n"
                 "}\n",
                 i, i);
                 mstring_append_fmt(preflight,
                 "vec4 norm%d(vec4 coord) {\n"
-                "    return vec4(norm%d(coord.xy), 0, coord.w);\n"
+                "    return vec4((coord.xy + vec2(0.5) * coord.w) / norm%dSize(), 0, coord.w);\n"
                 "}\n",
                 i, i);
             }
