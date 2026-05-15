@@ -113,6 +113,7 @@ static void apply_texture_parameters(PGRAPHGLState *r,
                                      unsigned int dimensionality,
                                      unsigned int filter,
                                      unsigned int address,
+                                     bool color_keyed,
                                      bool is_bordered,
                                      uint32_t border_color,
                                      uint32_t max_anisotropy)
@@ -138,6 +139,12 @@ static void apply_texture_parameters(PGRAPHGLState *r,
             min_filter = NV_PGRAPH_TEXFILTER0_MIN_TENT_LOD0;
             break;
         }
+    }
+
+    if (color_keyed) {
+        min_filter = NV_PGRAPH_TEXFILTER0_MIN_BOX_LOD0;
+        mag_filter = 1;
+        max_anisotropy = 1;
     }
 
     if (min_filter != binding->min_filter) {
@@ -225,10 +232,12 @@ void pgraph_gl_bind_textures(NV2AState *d)
 
         uint32_t filter = pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + i*4);
         uint32_t address = pgraph_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + i*4);
+        uint32_t texctl0 = pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + i*4);
         uint32_t border_color = pgraph_reg_r(pg, NV_PGRAPH_BORDERCOLOR0 + i*4);
         uint32_t max_anisotropy =
-            1 << (GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + i*4),
-                           NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY));
+            1 << (GET_MASK(texctl0, NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY));
+        bool color_keyed =
+            GET_MASK(texctl0, NV_PGRAPH_TEXCTL0_0_COLORKEYMODE) != 0;
 
         /* Check for unsupported features */
         if (filter & NV_PGRAPH_TEXFILTER0_ASIGNED) NV2A_UNIMPLEMENTED("NV_PGRAPH_TEXFILTER0_ASIGNED");
@@ -278,6 +287,7 @@ void pgraph_gl_bind_textures(NV2AState *d)
                                          state.dimensionality,
                                          filter,
                                          address,
+                                         color_keyed,
                                          state.border,
                                          border_color,
                                          max_anisotropy);
@@ -390,6 +400,7 @@ void pgraph_gl_bind_textures(NV2AState *d)
                                  state.dimensionality,
                                  filter,
                                  address,
+                                 color_keyed,
                                  state.border,
                                  border_color,
                                  max_anisotropy);
