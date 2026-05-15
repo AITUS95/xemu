@@ -1319,9 +1319,6 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     } else {
         possibly_dirty = true;
     }
-    if (!surface_to_texture && f_basic.linear) {
-        possibly_dirty = true;
-    }
 
     if (!surface_to_texture && !possibly_dirty_checked) {
         possibly_dirty |= check_texture_possibly_dirty(

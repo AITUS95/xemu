@@ -249,8 +249,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
                < memory_region_size(d->vram));
         bool is_indexed = (state.color_format ==
                 NV097_SET_TEXTURE_FORMAT_COLOR_SZ_I8_A8R8G8B8);
-        bool force_content_check =
-            kelvin_color_format_info_map[state.color_format].linear;
         bool possibly_dirty = false;
         bool possibly_dirty_checked = false;
 
@@ -268,7 +266,7 @@ void pgraph_gl_bind_textures(NV2AState *d)
                         palette_vram_offset,
                         is_indexed ? palette_length : 0);
                 possibly_dirty_checked = true;
-                reusable = !force_content_check && !possibly_dirty;
+                reusable = !possibly_dirty;
             }
 
             if (reusable) {
@@ -331,9 +329,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
                                      tex_binding_hash, &key);
         TextureLruNode *key_out = container_of(found, TextureLruNode, node);
         possibly_dirty |= (key_out->binding == NULL) || key_out->possibly_dirty;
-        if (!surf_to_tex) {
-            possibly_dirty |= force_content_check;
-        }
 
         if (!surf_to_tex && !possibly_dirty_checked) {
             possibly_dirty |= check_texture_possibly_dirty(
