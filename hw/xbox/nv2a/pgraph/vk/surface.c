@@ -171,28 +171,18 @@ static void surface_queue_download_range(SurfaceBinding *surface, hwaddr offset,
     }
 }
 
-bool pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
+void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
                                                    hwaddr start, hwaddr size)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     SurfaceBinding *surface;
-    bool downloaded_dirty_surface = false;
 
     QTAILQ_FOREACH(surface, &r->surfaces, entry) {
         if (check_surface_overlaps_range(surface, start, size)) {
-            bool surface_dirty = surface->draw_dirty;
             pgraph_vk_surface_download_if_dirty(
                 container_of(pg, NV2AState, pgraph), surface);
-            if (surface_dirty) {
-                downloaded_dirty_surface = true;
-                pgraph_vk_mark_textures_possibly_dirty(
-                    container_of(pg, NV2AState, pgraph),
-                    surface->vram_addr, surface->size);
-            }
         }
     }
-
-    return downloaded_dirty_surface;
 }
 
 static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
