@@ -1436,6 +1436,31 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     NV2A_VK_DGROUP_END();
 }
 
+static bool texture_binding_needs_refresh(PGRAPHState *pg, int texture_idx)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    TextureBinding *binding = r->texture_bindings[texture_idx];
+
+    if (!binding || !pgraph_is_texture_enabled(pg, texture_idx)) {
+        return false;
+    }
+
+    TextureKey *key = &binding->key;
+    NV2AState *d = container_of(pg, NV2AState, pgraph);
+    SurfaceBinding *surface = pgraph_vk_surface_get(
+        d, key->texture_vram_offset);
+
+    if (surface && key->state.levels == 1 &&
+        check_surface_to_texture_compatiblity(surface, &key->state)) {
+        return surface->upload_pending ||
+               surface->draw_time != binding->draw_time;
+    }
+
+    return check_texture_possibly_dirty(
+        d, key->texture_vram_offset, key->texture_length,
+        key->palette_vram_offset, key->palette_length);
+}
+
 static bool check_textures_dirty(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -1451,6 +1476,10 @@ static bool check_textures_dirty(PGRAPHState *pg)
 
         if (!r->texture_bindings[i] || !r->texture_samplers[i] ||
             pg->texture_dirty[i] || sampler_dirty) {
+            return true;
+        }
+
+        if (texture_binding_needs_refresh(pg, i)) {
             return true;
         }
     }
@@ -1476,7 +1505,6 @@ void pgraph_vk_bind_textures(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
-    // FIXME: Check for modifications on bind fastpath (CPU hook)
     // FIXME: Mark textures that are sourced from surfaces so we can track them
 
     r->texture_bindings_changed = false;
