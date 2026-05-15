@@ -1148,9 +1148,7 @@ static VkSampler create_texture_sampler(PGRAPHState *pg,
     unsigned int min_filter = GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN);
     assert(min_filter < ARRAY_SIZE(pgraph_texture_min_filter_vk_map));
 
-    if (key->color_keyed) {
-        vk_mag_filter = vk_min_filter = VK_FILTER_NEAREST;
-    } else if (is_linear_filter_supported_for_format(r, state->color_format)) {
+    if (is_linear_filter_supported_for_format(r, state->color_format)) {
         vk_mag_filter = pgraph_texture_min_filter_vk_map[mag_filter];
         vk_min_filter = pgraph_texture_min_filter_vk_map[min_filter];
     } else {
@@ -1176,7 +1174,6 @@ static VkSampler create_texture_sampler(PGRAPHState *pg,
         lod_bias = -r->device_props.limits.maxSamplerLodBias;
     }
     uint32_t sampler_max_anisotropy =
-        key->color_keyed ? 1 :
         MIN(r->device_props.limits.maxSamplerAnisotropy, max_anisotropy);
 
     VkSamplerCreateInfo sampler_create_info = {
@@ -1244,8 +1241,6 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     uint32_t filter =
         pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + texture_idx * 4);
-    uint32_t texctl0 =
-        pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + texture_idx * 4);
     uint32_t address =
         pgraph_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + texture_idx * 4);
     uint32_t border_color_pack32 =
@@ -1253,7 +1248,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     bool is_indexed = (state.color_format ==
             NV097_SET_TEXTURE_FORMAT_COLOR_SZ_I8_A8R8G8B8);
     uint32_t max_anisotropy =
-        1 << (GET_MASK(texctl0, NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY));
+        1 << (GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + texture_idx*4),
+                       NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY));
 
     TextureKey key;
     memset(&key, 0, sizeof(key));
@@ -1276,8 +1272,6 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     sampler_key.address = address;
     sampler_key.border_color = border_color_pack32;
     sampler_key.max_anisotropy = max_anisotropy;
-    sampler_key.color_keyed =
-        GET_MASK(texctl0, NV_PGRAPH_TEXCTL0_0_COLORKEYMODE) != 0;
 
     bool possibly_dirty = false;
     bool possibly_dirty_checked = false;

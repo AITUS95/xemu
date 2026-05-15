@@ -228,7 +228,6 @@ typedef struct TextureSamplerKey {
     uint32_t address;
     uint32_t border_color;
     uint32_t max_anisotropy;
-    bool color_keyed;
 } TextureSamplerKey;
 
 typedef struct TextureSamplerBinding {
