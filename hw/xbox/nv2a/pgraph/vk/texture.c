@@ -1282,21 +1282,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     if (surface && state.levels == 1) {
         surface_to_texture =
             check_surface_to_texture_compatiblity(surface, &state);
-        bool surface_to_texture_compatible = surface_to_texture;
 
-        /*
-         * The scaled color surface-to-texture path copies a host-scaled image
-         * and compensates in the shader with texScale. Some titles update UI
-         * render targets in ways that expose transient sampling artifacts in
-         * that path, so prefer the VRAM-backed upload path when internal
-         * scaling is enabled.
-         */
-        if (surface_to_texture && surface->color &&
-            pg->surface_scale_factor > 1) {
-            surface_to_texture = false;
-        }
-
-        if (!surface_to_texture_compatible && surface->color) {
+        if (!surface_to_texture && surface->color) {
             trace_nv2a_pgraph_surface_texture_compat_failed(
                 surface->shape.color_format,
                 state.color_format);
