@@ -242,7 +242,6 @@ uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
 }
 
 #ifdef XBOX_TCG_DIRECT_TB_STATE
-#define XBOX_I386_HF_CS64_MASK (1u << 15)
 #define XBOX_I386_R_CS 1
 
 typedef struct XboxI386SegmentCachePrefix {
@@ -287,19 +286,12 @@ void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
                                 uint32_t *flags, uint64_t *cs_base)
 {
     const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
-    uint32_t hflags = xenv->hflags;
+    uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
     vaddr eip = xenv->eip;
 
-    *flags = hflags;
-    if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
-        *pc = eip;
-        *cs_base = 0;
-    } else {
-        uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
-
-        *pc = (uint32_t)(base + eip);
-        *cs_base = base;
-    }
+    *pc = (uint32_t)(base + eip);
+    *flags = xenv->hflags;
+    *cs_base = base;
 }
 #endif
 
