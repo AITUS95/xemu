@@ -170,6 +170,10 @@ jobs:
             vc_arch: amd64
             qemu_cpu: x86_64
             build_config: release
+          - arch: x64
+            vc_arch: amd64
+            qemu_cpu: x86_64
+            build_config: renderdoc
     steps:
       - name: Clone tree
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
