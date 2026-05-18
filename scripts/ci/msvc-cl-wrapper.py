@@ -80,7 +80,6 @@ KNOWN_PASSTHROUGH_FLAGS = {
 }
 
 BUILD_CONFIG = os.environ.get("MSVC_CL_WRAPPER_BUILD_CONFIG", "profile").lower()
-DEBUG_LIKE_BUILD_CONFIGS = {"debug", "renderdoc"}
 LINKER_MACHINE = os.environ.get("MSVC_CL_WRAPPER_MACHINE", "X64").upper()
 COMPILER_RT_MACHINE = {
     "X64": "x86_64",
@@ -93,7 +92,7 @@ CXX_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx", ".c++", ".C"}
 def compiler_defaults():
     if BUILD_CONFIG == "release":
         return ["/MD", "/O2"]
-    if BUILD_CONFIG in DEBUG_LIKE_BUILD_CONFIGS:
+    if BUILD_CONFIG == "debug":
         return ["/Zi", "/FS", "/MD", "/Oy-", "/Od"]
     return ["/Zi", "/FS", "/MD", "/Oy-", "/O2"]
 
@@ -107,13 +106,13 @@ def linker_defaults():
     ]
     if BUILD_CONFIG == "release":
         return ["/OPT:REF", "/OPT:ICF", *defaults]
-    if BUILD_CONFIG in DEBUG_LIKE_BUILD_CONFIGS:
+    if BUILD_CONFIG == "debug":
         return ["/DEBUG:FULL", "/PDB:xemu.pdb", "/OPT:NOREF", "/OPT:NOICF", *defaults]
     return ["/DEBUG:FULL", "/PDB:xemu.pdb", "/OPT:REF", "/OPT:NOICF", *defaults]
 
 
 def optimization_flag():
-    return "/Od" if BUILD_CONFIG in DEBUG_LIKE_BUILD_CONFIGS else "/O2"
+    return "/Od" if BUILD_CONFIG == "debug" else "/O2"
 
 
 def split_response_text(text):

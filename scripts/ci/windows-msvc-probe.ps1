@@ -4,7 +4,7 @@ param(
     [string]$BuildDir = "build-msvc",
     [ValidateSet("deps", "fast", "core", "full")]
     [string]$BuildScope = "fast",
-    [ValidateSet("debug", "profile", "release", "renderdoc", "all")]
+    [ValidateSet("debug", "profile", "release", "all")]
     [string]$BuildConfig = "profile",
     [string]$VcpkgTriplet = "x64-windows",
     [string]$ExtraConfigureArgs = "",
@@ -1133,7 +1133,7 @@ function Invoke-AllBuildConfigs {
     "[$($startedAt.ToString("yyyy-MM-dd HH:mm:ss"))] BEGIN all configs" | Set-Content -Path $phaseLog
 
     $powerShellHost = Get-PowerShellHostPath
-    $configs = @("debug", "profile", "release", "renderdoc")
+    $configs = @("debug", "profile", "release")
     $statusLines = @(
         "build_scope=$BuildScope",
         "build_config=all",
@@ -1560,8 +1560,7 @@ $bash = $bashPath
 $wrapperPy = Join-Path $repoRoot "scripts\ci\msvc-cl-wrapper.py"
 $localCompiler = Join-Path $buildPath "msvc-cl.cmd"
 $localCompilerMeson = ConvertTo-WindowsSlashPath $localCompiler
-$debugLikeBuildConfigs = @("debug", "renderdoc")
-$mesonOptimization = if ($BuildConfig -in $debugLikeBuildConfigs) { "0" } else { "2" }
+$mesonOptimization = if ($BuildConfig -eq "debug") { "0" } else { "2" }
 
 $configureArgs = @(
     "../configure",
@@ -1591,10 +1590,7 @@ if ($BuildScope -eq "fast") {
         "-Dvulkan=disabled"
     )
 } elseif ($BuildScope -eq "full") {
-    $configureArgs += @(
-        "-Dopengl=enabled",
-        "-Dvulkan=enabled"
-    )
+    $configureArgs += "-Dvulkan=enabled"
 }
 
 $configureLine = $configureArgs -join " "
@@ -1997,7 +1993,6 @@ if ($BuildScope -eq "full" -and $buildExit -eq 0) {
             $artifactConfigName = switch ($BuildConfig) {
                 "release" { "release" }
                 "debug" { "debug" }
-                "renderdoc" { "renderdoc" }
                 default { "profile" }
             }
             $includePdb = $BuildConfig -ne "release"
