@@ -396,10 +396,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
         assert(pg->inline_buffer_length == 0);
         assert(pg->inline_array_length == 0);
 
-        pgraph_gl_bind_vertex_attributes(d, pg->draw_arrays_min_start,
-                                      pg->draw_arrays_max_count - 1,
-                                      false, 0,
-                                      pg->draw_arrays_max_count - 1);
+        pgraph_gl_bind_vertex_attributes_from_vram_snapshot(
+            d, pg->draw_arrays_min_start, pg->draw_arrays_max_count - 1,
+            pg->draw_arrays_max_count - 1);
         glMultiDrawArrays(r->shader_binding->gl_primitive_mode,
                           pg->draw_arrays_start,
                           pg->draw_arrays_count,
@@ -417,9 +416,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
             min_element = MIN(pg->inline_elements[i], min_element);
         }
 
-        pgraph_gl_bind_vertex_attributes(
-                d, min_element, max_element, false, 0,
-                pg->inline_elements[pg->inline_elements_length - 1]);
+        pgraph_gl_bind_vertex_attributes_from_vram_snapshot(
+            d, min_element, max_element,
+            pg->inline_elements[pg->inline_elements_length - 1]);
 
         VertexKey k;
         memset(&k, 0, sizeof(VertexKey));
