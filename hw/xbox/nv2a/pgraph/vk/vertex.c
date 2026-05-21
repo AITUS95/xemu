@@ -53,6 +53,15 @@ void pgraph_vk_update_vertex_ram_buffer(PGRAPHState *pg, hwaddr offset,
     size_t end_bit = TARGET_PAGE_ALIGN(offset + size) / TARGET_PAGE_SIZE;
     size_t nbits = end_bit - start_bit;
 
+    if (r->in_command_buffer &&
+        find_next_bit(r->vertex_ram_in_use_bitmap, start_bit + nbits,
+                      start_bit) < end_bit) {
+        assert(!r->in_draw);
+        NV2A_VK_DPRINTF("Finishing before overwriting vertex RAM used by "
+                        "current command buffer");
+        pgraph_vk_finish(pg, VK_FINISH_REASON_VERTEX_BUFFER_DIRTY);
+    }
+
     if (find_next_bit(r->uploaded_bitmap, start_bit + nbits, start_bit) <
         end_bit) {
         // Vertex data changed while building the draw list. Finish drawing

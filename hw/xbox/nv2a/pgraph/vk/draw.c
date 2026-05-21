@@ -1551,6 +1551,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
         r->descriptor_set_index = 0;
         r->in_command_buffer = false;
+        bitmap_clear(r->vertex_ram_in_use_bitmap, 0, r->bitmap_size);
         destroy_framebuffers(pg);
 
         if (check_budget) {
@@ -1902,6 +1903,11 @@ static void sync_vertex_ram_buffer(PGRAPHState *pg)
             pgraph_vk_update_vertex_ram_buffer(pg, addr, d->vram_ptr + addr,
                                                size);
         }
+
+        size_t start_bit = addr / TARGET_PAGE_SIZE;
+        size_t end_bit = TARGET_PAGE_ALIGN(addr + size) / TARGET_PAGE_SIZE;
+        bitmap_set(r->vertex_ram_in_use_bitmap, start_bit,
+                   end_bit - start_bit);
     }
 
     r->num_vertex_ram_buffer_syncs = 0;
