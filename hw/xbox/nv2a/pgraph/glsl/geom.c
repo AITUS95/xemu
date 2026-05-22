@@ -153,7 +153,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         need_triz = true;
         layout_in = "layout(triangles) in;\n";
         if (polygon_mode == POLY_MODE_FILL) {
-            layout_out = "layout(triangle_strip, max_vertices = 6) out;\n";
+            layout_out = "layout(triangle_strip, max_vertices = 9) out;\n";
             snprintf(body_buf, sizeof(body_buf),
                      "  emit_clipped_triangle(load_vertex(v[0], %s), "
                      "load_vertex(v[1], %s), load_vertex(v[2], %s));\n",
@@ -183,7 +183,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         need_quadz = true;
         layout_in = "layout(lines_adjacency) in;\n";
         if (polygon_mode == POLY_MODE_FILL) {
-            layout_out = "layout(triangle_strip, max_vertices = 12) out;\n";
+            layout_out = "layout(triangle_strip, max_vertices = 18) out;\n";
             body = "  emit_clipped_triangle(load_vertex(1, 3), "
                    "load_vertex(2, 3), load_vertex(0, 3));\n"
                    "  emit_clipped_triangle(load_vertex(2, 3), "
@@ -217,7 +217,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         need_quadz = true;
         layout_in = "layout(lines_adjacency) in;\n";
         if (polygon_mode == POLY_MODE_FILL) {
-            layout_out = "layout(triangle_strip, max_vertices = 12) out;\n";
+            layout_out = "layout(triangle_strip, max_vertices = 18) out;\n";
             body = "  if ((gl_PrimitiveIDIn & 1) != 0) { return; }\n"
                    "  emit_clipped_triangle(load_vertex(0, 3), "
                    "load_vertex(1, 3), load_vertex(2, 3));\n"
@@ -254,7 +254,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             provoking_index = "v[2]";
             need_triz = true;
             layout_in = "layout(triangles) in;\n";
-            layout_out = "layout(triangle_strip, max_vertices = 6) out;\n";
+            layout_out = "layout(triangle_strip, max_vertices = 9) out;\n";
             body = "  emit_clipped_triangle(load_vertex(v[0], v[2]), "
                    "load_vertex(v[1], v[2]), load_vertex(v[2], v[2]));\n";
         } else if (polygon_mode == POLY_MODE_LINE) {
@@ -351,9 +351,13 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
 
     if (need_triz || need_quadz) {
         const char *color_index = state->smooth_shading ? "index" : "flat_index";
+        const char *near_clip_distance =
+            opts.vulkan ? "v.position.z" : "v.position.z + v.position.w";
         mstring_append_fmt(
             output,
             "const float CLIP_W_EPSILON = 5.42101086242752217e-20;\n"
+            "const int CLIP_PLANE_COUNT = 2;\n"
+            "const int MAX_CLIPPED_VERTICES = 5;\n"
             "\n"
             "struct ClipVertex {\n"
             "  vec4 position;\n"
@@ -387,15 +391,18 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             "  return v;\n"
             "}\n"
             "\n"
-            "bool clip_inside(ClipVertex v) {\n"
-            "  return v.pos.w >= CLIP_W_EPSILON;\n"
+            "float clip_distance(ClipVertex v, int plane) {\n"
+            "  if (plane == 0) {\n"
+            "    return %s;\n"
+            "  }\n"
+            "  return v.position.w - v.position.z;\n"
             "}\n"
             "\n"
-            "ClipVertex intersect_clip_edge(ClipVertex a, ClipVertex b) {\n"
-            "  float t = (CLIP_W_EPSILON - a.pos.w) / (b.pos.w - a.pos.w);\n"
+            "ClipVertex intersect_clip_edge(ClipVertex a, ClipVertex b,\n"
+            "                                 float a_dist, float b_dist) {\n"
+            "  float t = a_dist / (a_dist - b_dist);\n"
             "  ClipVertex v;\n"
             "  v.position = mix(a.position, b.position, t);\n"
-            "  v.position.w = CLIP_W_EPSILON;\n"
             "  v.pointSize = mix(a.pointSize, b.pointSize, t);\n"
             "  v.d0 = mix(a.d0, b.d0, t);\n"
             "  v.d1 = mix(a.d1, b.d1, t);\n"
@@ -406,15 +413,19 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             "  v.t1 = mix(a.t1, b.t1, t);\n"
             "  v.t2 = mix(a.t2, b.t2, t);\n"
             "  v.t3 = mix(a.t3, b.t3, t);\n"
-            "  v.pos.w = CLIP_W_EPSILON;\n"
-            "  v.pos.xyz = mix(a.pos.xyz * a.pos.w, b.pos.xyz * b.pos.w, t) / v.pos.w;\n"
+            "  v.pos.w = mix(a.pos.w, b.pos.w, t);\n"
+            "  float safe_w = abs(v.pos.w) < CLIP_W_EPSILON ?\n"
+            "                 ((v.pos.w < 0.0) ? -CLIP_W_EPSILON : CLIP_W_EPSILON) :\n"
+            "                 v.pos.w;\n"
+            "  v.pos.xyz = mix(a.pos.xyz * a.pos.w, b.pos.xyz * b.pos.w, t) / safe_w;\n"
             "  return v;\n"
             "}\n"
             "\n",
             color_index,
             color_index,
             color_index,
-            color_index);
+            color_index,
+            near_clip_distance);
     }
 
     if (need_triz || need_quadz) {
@@ -498,6 +509,10 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             "}\n"
             "\n"
             "void emit_triangle_data(ClipVertex a, ClipVertex b, ClipVertex c) {\n"
+            "  if (a.pos.w < CLIP_W_EPSILON || b.pos.w < CLIP_W_EPSILON ||\n"
+            "      c.pos.w < CLIP_W_EPSILON) {\n"
+            "    return;\n"
+            "  }\n"
             "  mat4 pz = calc_triz_pos(a.pos, b.pos, c.pos);\n"
             "  emit_clip_vertex(a, pz);\n"
             "  emit_clip_vertex(b, pz);\n"
@@ -506,34 +521,46 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             "}\n"
             "\n"
             "void emit_clipped_triangle(ClipVertex v0, ClipVertex v1, ClipVertex v2) {\n"
-            "  ClipVertex input_vertices[3];\n"
-            "  ClipVertex output_vertices[4];\n"
+            "  ClipVertex input_vertices[MAX_CLIPPED_VERTICES];\n"
+            "  ClipVertex output_vertices[MAX_CLIPPED_VERTICES];\n"
             "  input_vertices[0] = v0;\n"
             "  input_vertices[1] = v1;\n"
             "  input_vertices[2] = v2;\n"
-            "  int output_count = 0;\n"
-            "  ClipVertex start = input_vertices[2];\n"
-            "  bool start_inside = clip_inside(start);\n"
-            "  for (int i = 0; i < 3; i++) {\n"
-            "    ClipVertex end = input_vertices[i];\n"
-            "    bool end_inside = clip_inside(end);\n"
-            "    if (end_inside) {\n"
-            "      if (!start_inside) {\n"
-            "        output_vertices[output_count++] = intersect_clip_edge(start, end);\n"
+            "  int input_count = 3;\n"
+            "  for (int plane = 0; plane < CLIP_PLANE_COUNT; plane++) {\n"
+            "    int output_count = 0;\n"
+            "    ClipVertex start = input_vertices[input_count - 1];\n"
+            "    float start_dist = clip_distance(start, plane);\n"
+            "    bool start_inside = start_dist >= 0.0;\n"
+            "    for (int i = 0; i < input_count; i++) {\n"
+            "      ClipVertex end = input_vertices[i];\n"
+            "      float end_dist = clip_distance(end, plane);\n"
+            "      bool end_inside = end_dist >= 0.0;\n"
+            "      if (end_inside) {\n"
+            "        if (!start_inside) {\n"
+            "          output_vertices[output_count++] =\n"
+            "              intersect_clip_edge(start, end, start_dist, end_dist);\n"
+            "        }\n"
+            "        output_vertices[output_count++] = end;\n"
+            "      } else if (start_inside) {\n"
+            "        output_vertices[output_count++] =\n"
+            "            intersect_clip_edge(start, end, start_dist, end_dist);\n"
             "      }\n"
-            "      output_vertices[output_count++] = end;\n"
-            "    } else if (start_inside) {\n"
-            "      output_vertices[output_count++] = intersect_clip_edge(start, end);\n"
+            "      start = end;\n"
+            "      start_dist = end_dist;\n"
+            "      start_inside = end_inside;\n"
             "    }\n"
-            "    start = end;\n"
-            "    start_inside = end_inside;\n"
+            "    if (output_count < 3) {\n"
+            "      return;\n"
+            "    }\n"
+            "    for (int i = 0; i < output_count; i++) {\n"
+            "      input_vertices[i] = output_vertices[i];\n"
+            "    }\n"
+            "    input_count = output_count;\n"
             "  }\n"
-            "  if (output_count < 3) {\n"
-            "    return;\n"
-            "  }\n"
-            "  emit_triangle_data(output_vertices[0], output_vertices[1], output_vertices[2]);\n"
-            "  if (output_count == 4) {\n"
-            "    emit_triangle_data(output_vertices[0], output_vertices[2], output_vertices[3]);\n"
+            "  for (int i = 1; i < input_count - 1; i++) {\n"
+            "    emit_triangle_data(input_vertices[0], input_vertices[i],\n"
+            "                       input_vertices[i + 1]);\n"
             "  }\n"
             "}\n");
     }
