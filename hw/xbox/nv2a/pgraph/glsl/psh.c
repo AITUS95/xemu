@@ -1017,15 +1017,16 @@ static MString* psh_convert(struct PixelShader *ps)
             "bc2 *= inv_bcsum;\n"
             "precise float zvalue = vtxPos0.w + (bc1*(vtxPos1.w - vtxPos0.w) + bc2*(vtxPos2.w - vtxPos0.w));\n"
             // If GPU clipping is inaccurate, the point gl_FragCoord.xy might
-            // be above the horizon of the plane of a rasterized triangle,
-            // making the interpolated w-coordinate above zero or negative.
-            // Discard those fragments instead of clamping them to infinity.
+            // be above the horizon of the plane of a rasterized triangle
+            // making the interpolated w-coordinate above zero or negative. We
+            // should prevent such wrapping through infinity by clamping to
+            // infinity.
             "if (zvalue > 0.0) {\n"
             "  float zslopeofs = depthFactor*triMZ*zvalue*zvalue;\n"
             "  zvalue += depthOffset;\n"
             "  zvalue += zslopeofs;\n"
             "} else {\n"
-            "  discard;\n"
+            "  zvalue = uintBitsToFloat(0x7F7FFFFFu);\n"
             "}\n"
             "if (isnan(zvalue)) {\n"
             "  zvalue = uintBitsToFloat(0x7F7FFFFFu);\n"
