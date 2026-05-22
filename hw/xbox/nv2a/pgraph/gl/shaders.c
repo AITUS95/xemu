@@ -468,9 +468,9 @@ static bool shader_write_cached_binary_file(const char *cache_key, uint64_t hash
         gl_vendor_len = (uint64_t)(strlen(shader_gl_vendor) + 1);
     }
 
-    static uint64_t xemu_version_len = 0;
-    if (xemu_version_len == 0) {
-        xemu_version_len = (uint64_t)(strlen(xemu_version) + 1);
+    static uint64_t build_id_len = 0;
+    if (build_id_len == 0) {
+        build_id_len = (uint64_t)(strlen(xemu_commit) + 1);
     }
 
     shader_bin = shader_get_bin_directory(cache_key, hash);
@@ -495,8 +495,8 @@ static bool shader_write_cached_binary_file(const char *cache_key, uint64_t hash
         } \
     } while (0)
 
-    WRITE_OR_ERR(&xemu_version_len, sizeof(xemu_version_len));
-    WRITE_OR_ERR(xemu_version, xemu_version_len);
+    WRITE_OR_ERR(&build_id_len, sizeof(build_id_len));
+    WRITE_OR_ERR(xemu_commit, build_id_len);
     WRITE_OR_ERR(&gl_vendor_len, sizeof(gl_vendor_len));
     WRITE_OR_ERR(shader_gl_vendor, gl_vendor_len);
     WRITE_OR_ERR(&program_format, sizeof(program_format));
@@ -516,11 +516,11 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
                                        const char *migrate_cache_key)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
-    char *cached_xemu_version = NULL;
+    char *cached_build_id = NULL;
     char *cached_gl_vendor = NULL;
     void *program_buffer = NULL;
 
-    uint64_t cached_xemu_version_len;
+    uint64_t cached_build_id_len;
     uint64_t gl_vendor_len;
     GLenum program_binary_format;
     ShaderState state;
@@ -541,11 +541,11 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
             } \
         } while (0)
 
-    READ_OR_ERR(&cached_xemu_version_len, sizeof(cached_xemu_version_len));
+    READ_OR_ERR(&cached_build_id_len, sizeof(cached_build_id_len));
 
-    cached_xemu_version = g_malloc(cached_xemu_version_len +1);
-    READ_OR_ERR(cached_xemu_version, cached_xemu_version_len);
-    if (strcmp(cached_xemu_version, xemu_version) != 0) {
+    cached_build_id = g_malloc(cached_build_id_len + 1);
+    READ_OR_ERR(cached_build_id, cached_build_id_len);
+    if (strcmp(cached_build_id, xemu_commit) != 0) {
         fclose(shader_file);
         goto error;
     }
@@ -569,7 +569,7 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
     #undef READ_OR_ERR
 
     fclose(shader_file);
-    g_free(cached_xemu_version);
+    g_free(cached_build_id);
     g_free(cached_gl_vendor);
 
     if (migrate_cache_key &&
@@ -602,7 +602,7 @@ error:
     /* Delete the shader so it won't be loaded again */
     qemu_unlink(shader_path);
     g_free(program_buffer);
-    g_free(cached_xemu_version);
+    g_free(cached_build_id);
     g_free(cached_gl_vendor);
     return false;
 }
