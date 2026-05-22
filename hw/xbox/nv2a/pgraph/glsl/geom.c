@@ -154,6 +154,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
         if (polygon_mode == POLY_MODE_FILL) {
             layout_out = "layout(triangle_strip, max_vertices = 3) out;\n";
             body = "  mat4 pz = calc_triz(v[0], v[1], v[2]);\n"
+                   "  if (invalid_triz(pz)) { return; }\n"
                    "  emit_vertex(v[0], pz);\n"
                    "  emit_vertex(v[1], pz);\n"
                    "  emit_vertex(v[2], pz);\n"
@@ -185,14 +186,18 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             layout_out = "layout(triangle_strip, max_vertices = 6) out;\n";
             body = "  mat4 pz, pz2;\n"
                    "  calc_quadz(0, 1, 2, 3, pz, pz2);\n"
+                   "  if (!invalid_triz(pz)) {\n"
                    "  emit_vertex(1, pz);\n"
                    "  emit_vertex(2, pz);\n"
                    "  emit_vertex(0, pz);\n"
                    "  EndPrimitive();\n"
+                   "  }\n"
+                   "  if (!invalid_triz(pz2)) {\n"
                    "  emit_vertex(2, pz2);\n"
                    "  emit_vertex(3, pz2);\n"
                    "  emit_vertex(0, pz2);\n"
-                   "  EndPrimitive();\n";
+                   "  EndPrimitive();\n"
+                   "  }\n";
         } else if (polygon_mode == POLY_MODE_LINE) {
             need_linez = true;
             layout_out = "layout(line_strip, max_vertices = 8) out;\n";
@@ -226,14 +231,18 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             body = "  if ((gl_PrimitiveIDIn & 1) != 0) { return; }\n"
                    "  mat4 pz, pz2;\n"
                    "  calc_quadz(2, 0, 1, 3, pz, pz2);\n"
+                   "  if (!invalid_triz(pz)) {\n"
                    "  emit_vertex(0, pz);\n"
                    "  emit_vertex(1, pz);\n"
                    "  emit_vertex(2, pz);\n"
                    "  EndPrimitive();\n"
+                   "  }\n"
+                   "  if (!invalid_triz(pz2)) {\n"
                    "  emit_vertex(2, pz2);\n"
                    "  emit_vertex(1, pz2);\n"
                    "  emit_vertex(3, pz2);\n"
-                   "  EndPrimitive();\n";
+                   "  EndPrimitive();\n"
+                   "  }\n";
         } else if (polygon_mode == POLY_MODE_LINE) {
             need_linez = true;
             layout_out = "layout(line_strip, max_vertices = 8) out;\n";
@@ -267,6 +276,7 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
             layout_in = "layout(triangles) in;\n";
             layout_out = "layout(triangle_strip, max_vertices = 3) out;\n";
             body = "  mat4 pz = calc_triz(v[0], v[1], v[2]);\n"
+                   "  if (invalid_triz(pz)) { return; }\n"
                    "  emit_vertex(v[0], pz);\n"
                    "  emit_vertex(v[1], pz);\n"
                    "  emit_vertex(v[2], pz);\n"
@@ -415,6 +425,12 @@ MString *pgraph_glsl_gen_geom(const GeomState *state, GenGeomGlslOptions opts)
                 "  return mat4(v_vtxPos[i0], v_vtxPos[i1], v_vtxPos[i2], dz, vec3(0.0));\n"
                 "}\n");
         }
+
+        mstring_append(
+            output,
+            "bool invalid_triz(mat4 pz) {\n"
+            "  return pz[0].w <= 0.0 || pz[1].w <= 0.0 || pz[2].w <= 0.0;\n"
+            "}\n");
     }
 
     if (need_linez) {
