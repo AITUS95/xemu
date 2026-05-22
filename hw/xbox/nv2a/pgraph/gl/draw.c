@@ -226,7 +226,7 @@ void pgraph_gl_draw_begin(NV2AState *d)
         glDisable(GL_DEPTH_TEST);
     }
 
-    glDisable(GL_DEPTH_CLAMP);
+    glEnable(GL_DEPTH_CLAMP);
 
     /* Set first vertex convention to match Vulkan default */
     glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
