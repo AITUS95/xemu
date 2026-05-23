@@ -645,34 +645,11 @@ static void shader_reload_cache_list_from_path(PGRAPHState *pg,
     fclose(lru_shaders_list);
 }
 
-typedef struct ShaderCacheMigrationContext {
-    PGRAPHState *pg;
-    const char *cache_key;
-} ShaderCacheMigrationContext;
-
-static void shader_migrate_cache_entry_to_title(Lru *lru, LruNode *node,
-                                                void *opaque)
-{
-    ShaderBinding *binding = container_of(node, ShaderBinding, node);
-    ShaderCacheMigrationContext *ctx = opaque;
-
-    if (!binding->initialized) {
-        return;
-    }
-
-    if (g_strcmp0(binding->cache_key, ctx->cache_key) == 0) {
-        return;
-    }
-
-    pgraph_gl_shader_cache_to_disk(ctx->pg, binding);
-}
-
 static void shader_reload_title_cache_if_needed(PGRAPHState *pg)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
     g_autofree char *cache_key = NULL;
     g_autofree char *shader_lru_path = NULL;
-    ShaderCacheMigrationContext ctx;
 
     if (!g_config.perf.cache_shaders) {
         return;
@@ -692,15 +669,9 @@ static void shader_reload_title_cache_if_needed(PGRAPHState *pg)
     shader_reload_cache_list_from_path(pg, cache_key, shader_lru_path);
 
     /*
-     * If the title becomes known after some shaders were already loaded from
-     * the global cache, rewrite those active binaries into the title-specific
-     * cache so later runs can hit the per-game namespace directly.
+     * Leave active global bindings in place. Migrating them here would require
+     * synchronous glGetProgramBinary calls from the shader bind path.
      */
-    ctx.pg = pg;
-    ctx.cache_key = cache_key;
-    lru_visit_active(&r->shader_cache, shader_migrate_cache_entry_to_title,
-                     &ctx);
-
     g_free(r->loaded_shader_cache_key);
     r->loaded_shader_cache_key = g_steal_pointer(&cache_key);
 }
@@ -786,6 +757,7 @@ void pgraph_gl_init_shaders(PGRAPHState *pg)
     r->shader_cache.compare_nodes = shader_cache_entry_compare;
     r->shader_cache.post_node_evict = shader_cache_entry_post_evict;
 
+    r->loaded_shader_cache_key = g_strdup("global");
     qemu_thread_create(&r->shader_disk_thread, "pgraph.renderer_state->shader_cache",
                        shader_reload_lru_from_disk, pg, QEMU_THREAD_JOINABLE);
 
@@ -840,7 +812,9 @@ static void *shader_write_to_disk(void *arg)
 
 void pgraph_gl_shader_cache_to_disk(PGRAPHState *pg, ShaderBinding *binding)
 {
-    g_autofree char *cache_key = xemu_get_current_title_cache_key();
+    PGRAPHGLState *r = pg->gl_renderer_state;
+    const char *cache_key = r->loaded_shader_cache_key ?
+                            r->loaded_shader_cache_key : "global";
 
     if (binding->cached && g_strcmp0(binding->cache_key, cache_key) == 0) {
         return;
@@ -974,12 +948,13 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
     PGRAPHGLState *r = pg->gl_renderer_state;
 
     bool binding_changed = false;
-    shader_reload_title_cache_if_needed(pg);
     if (r->shader_binding &&
         !pgraph_glsl_check_shader_state_dirty(pg, &r->shader_binding->state)) {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND_NOTDIRTY);
         goto update_uniforms;
     }
+
+    shader_reload_title_cache_if_needed(pg);
 
     ShaderBinding *old_binding = r->shader_binding;
     ShaderState state = pgraph_glsl_get_shader_state(pg);
@@ -994,21 +969,6 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
 
     LruNode *node = lru_lookup(&r->shader_cache, shader_state_hash, &state);
     ShaderBinding *binding = container_of(node, ShaderBinding, node);
-
-    if (g_config.perf.cache_shaders && !binding->initialized) {
-        if (!binding->program) {
-            g_autofree char *cache_key = xemu_get_current_title_cache_key();
-
-            /* Fall back to a direct disk lookup for shaders not present in the
-             * title's LRU reload list, for example after an unclean shutdown. */
-            qemu_mutex_unlock(&r->shader_cache_lock);
-            shader_load_from_disk(pg, shader_state_hash, cache_key);
-            qemu_mutex_lock(&r->shader_cache_lock);
-
-            node = lru_lookup(&r->shader_cache, shader_state_hash, &state);
-            binding = container_of(node, ShaderBinding, node);
-        }
-    }
 
     if (!binding->initialized && !pgraph_gl_shader_load_from_memory(binding)) {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_GEN);
