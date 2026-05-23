@@ -995,7 +995,7 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
     LruNode *node = lru_lookup(&r->shader_cache, shader_state_hash, &state);
     ShaderBinding *binding = container_of(node, ShaderBinding, node);
 
-    if (!binding->initialized) {
+    if (g_config.perf.cache_shaders && !binding->initialized) {
         if (!binding->program) {
             g_autofree char *cache_key = xemu_get_current_title_cache_key();
 
