@@ -23,7 +23,6 @@
 #include "qemu/fast-hash.h"
 #include "qemu/mstring.h"
 
-#include "xemu-xbe.h"
 #include "xemu-version.h"
 #include "ui/xemu-settings.h"
 #include "hw/xbox/nv2a/pgraph/util.h"
@@ -645,37 +644,6 @@ static void shader_reload_cache_list_from_path(PGRAPHState *pg,
     fclose(lru_shaders_list);
 }
 
-static void shader_reload_title_cache_if_needed(PGRAPHState *pg)
-{
-    PGRAPHGLState *r = pg->gl_renderer_state;
-    g_autofree char *cache_key = NULL;
-    g_autofree char *shader_lru_path = NULL;
-
-    if (!g_config.perf.cache_shaders) {
-        return;
-    }
-
-    cache_key = xemu_get_current_title_cache_key();
-    if (g_strcmp0(r->loaded_shader_cache_key, cache_key) == 0) {
-        return;
-    }
-
-    /*
-     * OpenGL starts its background cache reload before the game title is
-     * always known. Reload the current title cache lazily once the XBE is
-     * available so per-title caches still get reused.
-     */
-    shader_lru_path = shader_get_lru_cache_path(cache_key);
-    shader_reload_cache_list_from_path(pg, cache_key, shader_lru_path);
-
-    /*
-     * Leave active global bindings in place. Migrating them here would require
-     * synchronous glGetProgramBinary calls from the shader bind path.
-     */
-    g_free(r->loaded_shader_cache_key);
-    r->loaded_shader_cache_key = g_steal_pointer(&cache_key);
-}
-
 static void *shader_reload_lru_from_disk(void *arg)
 {
     if (!g_config.perf.cache_shaders) {
@@ -953,8 +921,6 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND_NOTDIRTY);
         goto update_uniforms;
     }
-
-    shader_reload_title_cache_if_needed(pg);
 
     ShaderBinding *old_binding = r->shader_binding;
     ShaderState state = pgraph_glsl_get_shader_state(pg);
