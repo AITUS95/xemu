@@ -1443,7 +1443,7 @@ if (-not $env:VCPKG_BINARY_SOURCES) {
     }
     $env:VCPKG_BINARY_SOURCES = $binarySources -join ";"
 }
-$vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate")
+$vcpkgPackageNames = @("pkgconf", "glib", "pixman", "libepoxy", "libsamplerate", "libslirp")
 if ($BuildScope -in @("deps", "full")) {
     $vcpkgPackageNames += "vulkan-headers"
 }
@@ -1579,7 +1579,7 @@ $configureArgs = @(
     "-Doptimization=$mesonOptimization",
     "-Db_vscrt=md",
     "-Db_lto=false",
-    "-Dslirp=disabled",
+    "-Dslirp=enabled",
     "-Dslirp_smbd=disabled"
 )
 
