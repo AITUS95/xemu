@@ -133,16 +133,16 @@ static bool check_surface_overlaps_range(const SurfaceBinding *surface,
 static bool surface_can_download_partial(PGRAPHState *pg,
                                          const SurfaceBinding *surface)
 {
-    bool use_compute_to_convert_depth_stencil_format =
-        surface->host_fmt.vk_format == VK_FORMAT_D24_UNORM_S8_UINT ||
-        surface->host_fmt.vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT;
-
-    return !surface->swizzle &&
-           pg->surface_scale_factor == 1 &&
-           !use_compute_to_convert_depth_stencil_format &&
-           !(surface->host_fmt.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) &&
-           surface->fmt.bytes_per_pixel == surface->host_fmt.host_bytes_per_pixel &&
-           surface->pitch >= surface->width * surface->fmt.bytes_per_pixel;
+    /*
+     * Partial row downloads can leave the rest of the surface stale in VRAM.
+     * Later texture uploads hash the full texture range and may re-upload the
+     * whole image from VRAM, so a partial download can expose old rows as
+     * flickering render-target content. Keep downloads full until dirty state
+     * can distinguish partially-current surface rows from fully-current data.
+     */
+    (void)pg;
+    (void)surface;
+    return false;
 }
 
 static void surface_queue_download_range(SurfaceBinding *surface, hwaddr offset,
