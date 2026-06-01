@@ -408,10 +408,12 @@ void pgraph_rdi_write(PGRAPHState *pg, unsigned int select,
 
 static inline void pgraph_argb_pack32_to_rgba_float(uint32_t argb, float *rgba)
 {
-    rgba[0] = ((argb >> 16) & 0xFF) / 255.0f; /* red */
-    rgba[1] = ((argb >> 8) & 0xFF) / 255.0f; /* green */
-    rgba[2] = (argb & 0xFF) / 255.0f; /* blue */
-    rgba[3] = ((argb >> 24) & 0xFF) / 255.0f; /* alpha */
+    const float scale = 1.0f / 255.0f;
+
+    rgba[0] = ((argb >> 16) & 0xFF) * scale; /* red */
+    rgba[1] = ((argb >> 8) & 0xFF) * scale; /* green */
+    rgba[2] = (argb & 0xFF) * scale; /* blue */
+    rgba[3] = ((argb >> 24) & 0xFF) * scale; /* alpha */
 }
 
 void pgraph_write_zpass_pixel_cnt_report(NV2AState *d, uint32_t parameter, uint32_t result);
