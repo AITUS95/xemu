@@ -502,6 +502,8 @@ void pgraph_vk_finalize_buffers(NV2AState *d);
 bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
                                     VkDeviceSize size,
                                     VkDeviceAddress alignment);
+void pgraph_vk_flush_buffer_range(PGRAPHState *pg, int index,
+                                  VkDeviceSize offset, VkDeviceSize size);
 VkDeviceSize pgraph_vk_append_to_buffer(PGRAPHState *pg, int index, void **data,
                                         VkDeviceSize *sizes, size_t count,
                                         VkDeviceAddress alignment);

@@ -546,9 +546,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     }
     assert(buffer_offset <= r->storage_buffers[BUFFER_STAGING_SRC].buffer_size);
 
-    vmaFlushAllocation(r->allocator,
-                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
+    pgraph_vk_flush_buffer_range(pg, BUFFER_STAGING_SRC, 0, buffer_offset);
 
     vmaUnmapMemory(r->allocator,
                    r->storage_buffers[BUFFER_STAGING_SRC].allocation);
@@ -564,7 +562,7 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
-        .size = VK_WHOLE_SIZE
+        .size = buffer_offset,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -991,9 +989,8 @@ static void create_dummy_texture(PGRAPHState *pg)
                           (void *)&mapped_memory_ptr));
     memset(mapped_memory_ptr, 0xff, texture_data_size);
 
-    vmaFlushAllocation(r->allocator,
-                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
+    pgraph_vk_flush_buffer_range(pg, BUFFER_STAGING_SRC, 0,
+                                 texture_data_size);
 
     vmaUnmapMemory(r->allocator,
                    r->storage_buffers[BUFFER_STAGING_SRC].allocation);

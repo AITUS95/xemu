@@ -160,9 +160,8 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
         mapped_memory_ptr, d->vram_ptr + state.base + state.offset,
         state.in_width, state.in_height, state.pitch);
 
-    vmaFlushAllocation(r->allocator,
-                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
+    size_t image_size = (size_t)state.in_width * state.in_height * 4;
+    pgraph_vk_flush_buffer_range(pg, BUFFER_STAGING_SRC, 0, image_size);
 
     vmaUnmapMemory(r->allocator,
                    r->storage_buffers[BUFFER_STAGING_SRC].allocation);
@@ -178,7 +177,7 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
-        .size = VK_WHOLE_SIZE
+        .size = image_size,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,

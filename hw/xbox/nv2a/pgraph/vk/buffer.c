@@ -204,6 +204,29 @@ bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
     return (ROUND_UP(b->buffer_offset, alignment) + size) <= b->buffer_size;
 }
 
+void pgraph_vk_flush_buffer_range(PGRAPHState *pg, int index,
+                                  VkDeviceSize offset, VkDeviceSize size)
+{
+    if (!size) {
+        return;
+    }
+
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *b = &r->storage_buffers[index];
+
+    assert(offset <= b->buffer_size);
+    assert(size <= b->buffer_size - offset);
+
+    VkDeviceSize atom_size = MAX((VkDeviceSize)1,
+                                 r->device_props.limits.nonCoherentAtomSize);
+    VkDeviceSize flush_offset = QEMU_ALIGN_DOWN(offset, atom_size);
+    VkDeviceSize flush_end = MIN(QEMU_ALIGN_UP(offset + size, atom_size),
+                                 b->buffer_size);
+
+    VK_CHECK(vmaFlushAllocation(r->allocator, b->allocation, flush_offset,
+                                flush_end - flush_offset));
+}
+
 VkDeviceSize pgraph_vk_append_to_buffer(PGRAPHState *pg, int index, void **data,
                                         VkDeviceSize *sizes, size_t count,
                                         VkDeviceAddress alignment)

@@ -1118,7 +1118,8 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
                  surface->width * surface->fmt.bytes_per_pixel, surface->pitch,
                  surface->height);
 
-    vmaFlushAllocation(r->allocator, copy_buffer->allocation, 0, VK_WHOLE_SIZE);
+    pgraph_vk_flush_buffer_range(pg, BUFFER_STAGING_SRC, 0,
+                                 uploaded_image_size);
     vmaUnmapMemory(r->allocator, copy_buffer->allocation);
 
     VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
@@ -1131,7 +1132,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = copy_buffer->buffer,
-        .size = VK_WHOLE_SIZE
+        .size = uploaded_image_size,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
