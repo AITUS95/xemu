@@ -1211,10 +1211,17 @@ static TextureSamplerBinding *bind_texture_sampler(PGRAPHState *pg,
                                                    const TextureSamplerKey *key)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    TextureSamplerBinding *snode = r->texture_samplers[texture_idx];
+
+    if (snode && snode != &r->dummy_sampler &&
+        snode->sampler != VK_NULL_HANDLE &&
+        !memcmp(&snode->key, key, sizeof(*key))) {
+        return snode;
+    }
+
     uint64_t sampler_hash = fast_hash((void *)key, sizeof(*key));
     LruNode *node = lru_lookup(&r->texture_sampler_cache, sampler_hash, key);
-    TextureSamplerBinding *snode =
-        container_of(node, TextureSamplerBinding, node);
+    snode = container_of(node, TextureSamplerBinding, node);
 
     if (snode->sampler == VK_NULL_HANDLE) {
         memcpy(&snode->key, key, sizeof(*key));
@@ -1223,6 +1230,24 @@ static TextureSamplerBinding *bind_texture_sampler(PGRAPHState *pg,
 
     r->texture_samplers[texture_idx] = snode;
     return snode;
+}
+
+static bool current_texture_binding_matches(PGRAPHVkState *r,
+                                            const TextureBinding *binding,
+                                            const TextureKey *key)
+{
+    return binding && binding != &r->dummy_texture &&
+           binding->image != VK_NULL_HANDLE &&
+           !memcmp(&binding->key, key, sizeof(*key));
+}
+
+static bool current_texture_sampler_matches(PGRAPHVkState *r,
+                                            const TextureSamplerBinding *binding,
+                                            const TextureSamplerKey *key)
+{
+    return binding && binding != &r->dummy_sampler &&
+           binding->sampler != VK_NULL_HANDLE &&
+           !memcmp(&binding->key, key, sizeof(*key));
 }
 
 static void create_texture(PGRAPHState *pg, int texture_idx)
@@ -1276,6 +1301,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     bool possibly_dirty = false;
     bool possibly_dirty_checked = false;
     bool surface_to_texture = false;
+    bool surface_upload_pending = false;
 
     // Check active surfaces to see if this texture was a render target
     SurfaceBinding *surface = pgraph_vk_surface_get(d, texture_vram_offset);
@@ -1289,8 +1315,48 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                 state.color_format);
         }
 
-        if (surface_to_texture && surface->upload_pending) {
+        surface_upload_pending =
+            surface_to_texture && qatomic_read(&surface->upload_pending);
+        if (surface_upload_pending) {
             pgraph_vk_upload_surface_data(d, surface, false);
+        }
+    }
+
+    if (surface_to_texture && pg->surface_scale_factor > 1) {
+        key.scale = pg->surface_scale_factor;
+    }
+
+    TextureBinding *snode = r->texture_bindings[texture_idx];
+    bool binding_found = current_texture_binding_matches(r, snode, &key);
+
+    TextureSamplerBinding *sampler_binding = r->texture_samplers[texture_idx];
+    bool sampler_found =
+        current_texture_sampler_matches(r, sampler_binding, &sampler_key);
+
+    if (binding_found) {
+        bool can_reuse_current_binding = false;
+
+        if (surface_to_texture) {
+            can_reuse_current_binding =
+                !surface_upload_pending &&
+                surface->draw_time == snode->draw_time;
+        } else if (!snode->possibly_dirty &&
+                   !pgraph_vk_surface_range_has_dirty_overlap(
+                       pg, texture_vram_offset, texture_length)) {
+            possibly_dirty = check_texture_possibly_dirty(
+                d, texture_vram_offset, texture_length,
+                texture_palette_vram_offset, texture_palette_data_size);
+            possibly_dirty_checked = true;
+            can_reuse_current_binding = !possibly_dirty;
+        }
+
+        if (can_reuse_current_binding) {
+            if (!sampler_found) {
+                bind_texture_sampler(pg, texture_idx, &sampler_key);
+            }
+
+            NV2A_VK_DGROUP_END();
+            return;
         }
     }
 
@@ -1302,15 +1368,14 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
             pg, texture_vram_offset, texture_length);
     }
 
-    if (surface_to_texture && pg->surface_scale_factor > 1) {
-        key.scale = pg->surface_scale_factor;
-    }
     bind_texture_sampler(pg, texture_idx, &sampler_key);
 
-    uint64_t key_hash = fast_hash((void*)&key, sizeof(key));
-    LruNode *node = lru_lookup(&r->texture_cache, key_hash, &key);
-    TextureBinding *snode = container_of(node, TextureBinding, node);
-    bool binding_found = snode->image != VK_NULL_HANDLE;
+    if (!binding_found) {
+        uint64_t key_hash = fast_hash((void*)&key, sizeof(key));
+        LruNode *node = lru_lookup(&r->texture_cache, key_hash, &key);
+        snode = container_of(node, TextureBinding, node);
+        binding_found = snode->image != VK_NULL_HANDLE;
+    }
 
     if (binding_found) {
         NV2A_VK_DPRINTF("Cache hit");

@@ -226,11 +226,17 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
         surface->width, surface->height, surface->pitch,
         surface->fmt.bytes_per_pixel);
 
-    // Read surface into memory
-    uint8_t *gl_read_buf = pixels;
+    /*
+     * Full swizzled downloads can be converted directly from the tightly packed
+     * staging buffer into VRAM. Partial swizzled downloads still need the old
+     * temporary-row path, but partial downloads are currently disabled.
+     */
+    bool direct_swizzle_download =
+        surface->swizzle && row_start == 0 && row_count == surface->height;
 
+    uint8_t *gl_read_buf = pixels;
     uint8_t *swizzle_buf = pixels;
-    if (surface->swizzle) {
+    if (surface->swizzle && !direct_swizzle_download) {
         // FIXME: Swizzle in shader
         assert(pg->surface_scale_factor == 1 || downscale);
         swizzle_buf = (uint8_t *)g_malloc(surface->size);
@@ -499,16 +505,26 @@ static void download_surface_to_buffer(NV2AState *d, SurfaceBinding *surface,
                                 invalidate_size);
     }
 
-    memcpy_image(gl_read_buf, staging_dst->mapped, surface->pitch,
-                 surface->width * surface->fmt.bytes_per_pixel,
-                 row_count);
-
     if (surface->swizzle) {
         // FIXME: Swizzle in shader
-        swizzle_rect(swizzle_buf, surface->width, surface->height, pixels,
-                     surface->pitch, surface->fmt.bytes_per_pixel);
+        if (direct_swizzle_download) {
+            unsigned int tight_pitch =
+                surface->width * surface->fmt.bytes_per_pixel;
+            swizzle_rect(staging_dst->mapped, surface->width, surface->height,
+                         pixels, tight_pitch, surface->fmt.bytes_per_pixel);
+        } else {
+            memcpy_image(gl_read_buf, staging_dst->mapped, surface->pitch,
+                         surface->width * surface->fmt.bytes_per_pixel,
+                         row_count);
+            swizzle_rect(swizzle_buf, surface->width, surface->height, pixels,
+                         surface->pitch, surface->fmt.bytes_per_pixel);
+            g_free(swizzle_buf);
+        }
         nv2a_profile_inc_counter(NV2A_PROF_SURF_SWIZZLE);
-        g_free(swizzle_buf);
+    } else {
+        memcpy_image(gl_read_buf, staging_dst->mapped, surface->pitch,
+                     surface->width * surface->fmt.bytes_per_pixel,
+                     row_count);
     }
 }
 
@@ -601,6 +617,22 @@ void pgraph_vk_download_dirty_surfaces(NV2AState *d)
 
     qatomic_set(&r->download_dirty_surfaces_pending, false);
     qemu_event_set(&r->dirty_surfaces_download_complete);
+}
+
+bool pgraph_vk_surface_range_has_dirty_overlap(PGRAPHState *pg, hwaddr start,
+                                               hwaddr size)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    SurfaceBinding *surface;
+
+    QTAILQ_FOREACH(surface, &r->surfaces, entry) {
+        if (qatomic_read(&surface->draw_dirty) &&
+            check_surface_overlaps_range(surface, start, size)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static void surface_access_callback(void *opaque, MemoryRegion *mr, hwaddr addr,

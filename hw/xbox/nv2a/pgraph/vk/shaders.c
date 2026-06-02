@@ -171,6 +171,23 @@ static void init_descriptor_set_state(PGRAPHVkState *r,
     state->valid = true;
 }
 
+static void upload_uniform_buffers(PGRAPHState *pg,
+                                   ShaderUniformLayout *layouts[2])
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    for (int i = 0; i < 2; i++) {
+        void *data = layouts[i]->allocation;
+        VkDeviceSize size = layouts[i]->total_size;
+        r->uniform_buffer_offsets[i] = pgraph_vk_append_to_buffer(
+            pg, BUFFER_UNIFORM_STAGING, &data, &size, 1,
+            r->device_props.limits.minUniformBufferOffsetAlignment);
+    }
+
+    r->uniform_buffer_offsets_valid = true;
+    r->uniforms_changed = false;
+}
+
 static bool descriptor_set_state_equal(const DescriptorSetState *a,
                                        const DescriptorSetState *b)
 {
@@ -188,8 +205,8 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     ShaderBinding *binding = r->shader_binding;
     ShaderUniformLayout *layouts[] = { &binding->vsh.module_info->uniforms,
                                        &binding->psh.module_info->uniforms };
-    DescriptorSetState target_descriptor_state;
-    init_descriptor_set_state(r, layouts, &target_descriptor_state);
+    DescriptorSetState target_descriptor_state = { 0 };
+    bool target_descriptor_state_valid = false;
 
     bool need_uniform_write =
         r->uniforms_changed ||
@@ -197,6 +214,11 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     bool need_descriptor_write =
         r->shader_bindings_changed || r->texture_bindings_changed ||
         (r->descriptor_set_index == 0);
+
+    if (need_descriptor_write) {
+        init_descriptor_set_state(r, layouts, &target_descriptor_state);
+        target_descriptor_state_valid = true;
+    }
 
     if (need_descriptor_write && r->descriptor_set_index > 0 &&
         descriptor_set_state_equal(
@@ -214,7 +236,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         ubo_buffer_total_size += layouts[i]->total_size;
     }
     bool need_ubo_staging_buffer_reset =
-        r->uniforms_changed &&
+        need_uniform_write &&
         !pgraph_vk_buffer_has_space_for(pg, BUFFER_UNIFORM_STAGING,
                                         ubo_buffer_total_size,
                                         r->device_props.limits.minUniformBufferOffsetAlignment);
@@ -227,19 +249,11 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
         need_uniform_write = true;
         need_descriptor_write = true;
+        target_descriptor_state_valid = false;
     }
 
     if (need_uniform_write) {
-        for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
-            void *data = layouts[i]->allocation;
-            VkDeviceSize size = layouts[i]->total_size;
-            r->uniform_buffer_offsets[i] = pgraph_vk_append_to_buffer(
-                pg, BUFFER_UNIFORM_STAGING, &data, &size, 1,
-                r->device_props.limits.minUniformBufferOffsetAlignment);
-        }
-
-        r->uniform_buffer_offsets_valid = true;
-        r->uniforms_changed = false;
+        upload_uniform_buffers(pg, layouts);
     }
 
     /*
@@ -249,6 +263,10 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
      */
     if (!need_descriptor_write) {
         return;
+    }
+
+    if (!target_descriptor_state_valid) {
+        init_descriptor_set_state(r, layouts, &target_descriptor_state);
     }
 
     assert(r->descriptor_set_index < ARRAY_SIZE(r->descriptor_sets));
@@ -518,10 +536,10 @@ static void apply_uniform_updates(ShaderUniformLayout *layout,
 }
 
 /*
- * Keep Vulkan uniform uploads conservative for now. Several shader inputs are
- * derived from mixed PGRAPH state, texture state, and generated values, and
- * the aggressive skip path proved too easy to desynchronize and caused visual
- * artifacts.
+ * Keep Vulkan uniform uploads conservative. Several shader inputs are derived
+ * from mixed PGRAPH state, texture state, and generated values, and reusing old
+ * dynamic UBO offsets across command buffers can desynchronize recorded draws
+ * from the data later copied out of the staging buffer.
  */
 static void update_shader_uniforms(PGRAPHState *pg)
 {
@@ -553,12 +571,6 @@ static void update_shader_uniforms(PGRAPHState *pg)
                           binding->psh.uniform_locs, &psh_values,
                           PshUniform__COUNT);
 
-    /*
-     * Rebuilding uniform data is already required for the current draw. Avoid
-     * hashing the full UBO contents afterwards and walking the same data twice.
-     * Dynamic UBO offsets let the descriptor set reuse the previous binding
-     * when only the uploaded uniform slice changes.
-     */
     r->uniforms_changed = true;
     nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
 

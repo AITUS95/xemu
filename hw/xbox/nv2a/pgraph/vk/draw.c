@@ -1550,6 +1550,7 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                  VK_TRUE, UINT64_MAX));
 
         r->descriptor_set_index = 0;
+        r->uniform_buffer_offsets_valid = false;
         r->in_command_buffer = false;
         bitmap_clear(r->vertex_ram_in_use_bitmap, 0, r->bitmap_size);
         destroy_framebuffers(pg);
