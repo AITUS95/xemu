@@ -411,6 +411,9 @@ typedef struct PGRAPHVkState {
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     QTAILQ_HEAD(, SurfaceBinding) invalid_surfaces;
     SurfaceBinding *color_binding, *zeta_binding;
+    SurfaceBinding *surface_get_cache;
+    hwaddr surface_get_cache_addr;
+    bool surface_get_cache_valid;
     bool downloads_pending;
     QemuEvent downloads_complete;
     bool download_dirty_surfaces_pending;

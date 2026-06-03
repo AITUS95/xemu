@@ -130,6 +130,31 @@ static bool check_surface_overlaps_range(const SurfaceBinding *surface,
     return !(surface->vram_addr >= range_end || range_start >= surface_end);
 }
 
+static void surface_get_cache_clear(PGRAPHVkState *r)
+{
+    r->surface_get_cache = NULL;
+    r->surface_get_cache_valid = false;
+}
+
+static void surface_get_cache_store(PGRAPHVkState *r, hwaddr addr,
+                                    SurfaceBinding *surface)
+{
+    r->surface_get_cache_addr = addr;
+    r->surface_get_cache = surface;
+    r->surface_get_cache_valid = true;
+}
+
+static bool surface_get_cache_lookup(PGRAPHVkState *r, hwaddr addr,
+                                     SurfaceBinding **surface)
+{
+    if (!r->surface_get_cache_valid || r->surface_get_cache_addr != addr) {
+        return false;
+    }
+
+    *surface = r->surface_get_cache;
+    return true;
+}
+
 static bool surface_can_download_partial(PGRAPHState *pg,
                                          const SurfaceBinding *surface)
 {
@@ -178,7 +203,8 @@ void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg,
     SurfaceBinding *surface;
 
     QTAILQ_FOREACH(surface, &r->surfaces, entry) {
-        if (check_surface_overlaps_range(surface, start, size)) {
+        if (qatomic_read(&surface->draw_dirty) &&
+            check_surface_overlaps_range(surface, start, size)) {
             pgraph_vk_surface_download_if_dirty(
                 container_of(pg, NV2AState, pgraph), surface);
         }
@@ -756,6 +782,7 @@ static void invalidate_surface(NV2AState *d, SurfaceBinding *surface)
 
     unregister_cpu_access_callback(d, surface);
 
+    surface_get_cache_clear(r);
     QTAILQ_REMOVE(&r->surfaces, surface, entry);
     QTAILQ_INSERT_HEAD(&r->invalid_surfaces, surface, entry);
 }
@@ -789,6 +816,7 @@ static void surface_put(NV2AState *d, SurfaceBinding *surface)
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
 
     assert(pgraph_vk_surface_get(d, surface->vram_addr) == NULL);
+    surface_get_cache_clear(r);
 
     invalidate_overlapping_surfaces(d, surface);
     register_cpu_access_callback(d, surface);
@@ -799,14 +827,32 @@ static void surface_put(NV2AState *d, SurfaceBinding *surface)
 SurfaceBinding *pgraph_vk_surface_get(NV2AState *d, hwaddr addr)
 {
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
-
     SurfaceBinding *surface;
+
+    if (surface_get_cache_lookup(r, addr, &surface)) {
+        return surface;
+    }
+
+    surface = r->color_binding;
+    if (surface && surface->vram_addr == addr) {
+        surface_get_cache_store(r, addr, surface);
+        return surface;
+    }
+
+    surface = r->zeta_binding;
+    if (surface && surface->vram_addr == addr) {
+        surface_get_cache_store(r, addr, surface);
+        return surface;
+    }
+
     QTAILQ_FOREACH (surface, &r->surfaces, entry) {
         if (surface->vram_addr == addr) {
+            surface_get_cache_store(r, addr, surface);
             return surface;
         }
     }
 
+    surface_get_cache_store(r, addr, NULL);
     return NULL;
 }
 
@@ -1821,6 +1867,7 @@ void pgraph_vk_init_surfaces(PGRAPHState *pg)
 
     QTAILQ_INIT(&r->surfaces);
     QTAILQ_INIT(&r->invalid_surfaces);
+    surface_get_cache_clear(r);
 
     r->downloads_pending = false;
     qemu_event_init(&r->downloads_complete, false);
