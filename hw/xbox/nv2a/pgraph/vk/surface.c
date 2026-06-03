@@ -32,6 +32,13 @@
 const int num_invalid_surfaces_to_keep = 10;  // FIXME: Make automatic
 const int max_surface_frame_time_delta = 10;
 
+static struct {
+    PGRAPHVkState *renderer;
+    SurfaceBinding *surface;
+    hwaddr addr;
+    bool valid;
+} surface_get_cache;
+
 void pgraph_vk_set_surface_scale_factor(NV2AState *d, unsigned int scale)
 {
     g_config.display.quality.surface_scale = scale < 1 ? 1 : scale;
@@ -132,26 +139,31 @@ static bool check_surface_overlaps_range(const SurfaceBinding *surface,
 
 static void surface_get_cache_clear(PGRAPHVkState *r)
 {
-    r->surface_get_cache = NULL;
-    r->surface_get_cache_valid = false;
+    if (!surface_get_cache.valid || surface_get_cache.renderer == r) {
+        surface_get_cache.renderer = NULL;
+        surface_get_cache.surface = NULL;
+        surface_get_cache.valid = false;
+    }
 }
 
 static void surface_get_cache_store(PGRAPHVkState *r, hwaddr addr,
                                     SurfaceBinding *surface)
 {
-    r->surface_get_cache_addr = addr;
-    r->surface_get_cache = surface;
-    r->surface_get_cache_valid = true;
+    surface_get_cache.renderer = r;
+    surface_get_cache.addr = addr;
+    surface_get_cache.surface = surface;
+    surface_get_cache.valid = true;
 }
 
 static bool surface_get_cache_lookup(PGRAPHVkState *r, hwaddr addr,
                                      SurfaceBinding **surface)
 {
-    if (!r->surface_get_cache_valid || r->surface_get_cache_addr != addr) {
+    if (!surface_get_cache.valid || surface_get_cache.renderer != r ||
+        surface_get_cache.addr != addr) {
         return false;
     }
 
-    *surface = r->surface_get_cache;
+    *surface = surface_get_cache.surface;
     return true;
 }
 
