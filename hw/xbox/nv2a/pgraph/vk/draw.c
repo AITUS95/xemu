@@ -1710,6 +1710,7 @@ static void begin_draw(PGRAPHState *pg)
         nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
         vkCmdBindPipeline(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           r->pipeline_binding->pipeline);
+        r->pipeline_binding_changed = false;
         r->pipeline_binding->draw_time = pg->draw_time;
 
         unsigned int vp_width = pg->surface_binding_dim.width,
