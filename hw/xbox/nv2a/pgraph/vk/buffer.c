@@ -204,6 +204,23 @@ bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
     return (ROUND_UP(b->buffer_offset, alignment) + size) <= b->buffer_size;
 }
 
+bool pgraph_vk_buffer_has_space_for_ranges(PGRAPHState *pg, int index,
+                                           const VkDeviceSize *sizes,
+                                           size_t count,
+                                           VkDeviceAddress alignment)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *b = &r->storage_buffers[index];
+    VkDeviceSize offset = b->buffer_offset;
+
+    for (size_t i = 0; i < count; i++) {
+        offset = ROUND_UP(offset, alignment);
+        offset += sizes[i];
+    }
+
+    return offset <= b->buffer_size;
+}
+
 void pgraph_vk_flush_buffer_range(PGRAPHState *pg, int index,
                                   VkDeviceSize offset, VkDeviceSize size)
 {
@@ -232,19 +249,15 @@ VkDeviceSize pgraph_vk_append_to_buffer(PGRAPHState *pg, int index, void **data,
                                         VkDeviceAddress alignment)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-
-    VkDeviceSize total_size = 0;
-    for (int i = 0; i < count; i++) {
-        total_size += sizes[i];
-    }
-    assert(pgraph_vk_buffer_has_space_for(pg, index, total_size, alignment));
-
     StorageBuffer *b = &r->storage_buffers[index];
+    assert(pgraph_vk_buffer_has_space_for_ranges(pg, index, sizes, count,
+                                                 alignment));
+
     VkDeviceSize starting_offset = ROUND_UP(b->buffer_offset, alignment);
 
     assert(b->mapped);
 
-    for (int i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++) {
         b->buffer_offset = ROUND_UP(b->buffer_offset, alignment);
         memcpy(b->mapped + b->buffer_offset, data[i], sizes[i]);
         b->buffer_offset += sizes[i];

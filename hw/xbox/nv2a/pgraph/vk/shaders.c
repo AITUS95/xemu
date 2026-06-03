@@ -175,14 +175,21 @@ static void upload_uniform_buffers(PGRAPHState *pg,
                                    ShaderUniformLayout *layouts[2])
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    VkDeviceAddress alignment =
+        r->device_props.limits.minUniformBufferOffsetAlignment;
+    void *data[] = {
+        layouts[0]->allocation,
+        layouts[1]->allocation,
+    };
+    VkDeviceSize sizes[] = {
+        layouts[0]->total_size,
+        layouts[1]->total_size,
+    };
 
-    for (int i = 0; i < 2; i++) {
-        void *data = layouts[i]->allocation;
-        VkDeviceSize size = layouts[i]->total_size;
-        r->uniform_buffer_offsets[i] = pgraph_vk_append_to_buffer(
-            pg, BUFFER_UNIFORM_STAGING, &data, &size, 1,
-            r->device_props.limits.minUniformBufferOffsetAlignment);
-    }
+    r->uniform_buffer_offsets[0] = pgraph_vk_append_to_buffer(
+        pg, BUFFER_UNIFORM_STAGING, data, sizes, ARRAY_SIZE(data), alignment);
+    r->uniform_buffer_offsets[1] =
+        ROUND_UP(r->uniform_buffer_offsets[0] + sizes[0], alignment);
 
     r->uniform_buffer_offsets_valid = true;
     r->uniforms_changed = false;
@@ -231,15 +238,16 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         return; // Nothing changed
     }
 
-    VkDeviceSize ubo_buffer_total_size = 0;
+    VkDeviceSize ubo_buffer_sizes[2];
     for (int i = 0; i < ARRAY_SIZE(layouts); i++) {
-        ubo_buffer_total_size += layouts[i]->total_size;
+        ubo_buffer_sizes[i] = layouts[i]->total_size;
     }
     bool need_ubo_staging_buffer_reset =
         need_uniform_write &&
-        !pgraph_vk_buffer_has_space_for(pg, BUFFER_UNIFORM_STAGING,
-                                        ubo_buffer_total_size,
-                                        r->device_props.limits.minUniformBufferOffsetAlignment);
+        !pgraph_vk_buffer_has_space_for_ranges(
+            pg, BUFFER_UNIFORM_STAGING, ubo_buffer_sizes,
+            ARRAY_SIZE(ubo_buffer_sizes),
+            r->device_props.limits.minUniformBufferOffsetAlignment);
 
     bool need_descriptor_write_reset =
         need_descriptor_write &&
