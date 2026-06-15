@@ -1,6 +1,7 @@
 project('dsp56300', version: '0.1.3')
 
 fs = import('fs')
+python = import('python').find_installation()
 
 host_cpu = host_machine.cpu_family()
 host_os = host_machine.system()
@@ -28,7 +29,11 @@ if not fs.exists(lib)
     message('Downloading dsp56300 @0@ for @1@...'.format(ver, rust_target))
     run_command(find_program('curl'), '-fsSL', url, '-o', src_archive, check: true)
   endif
-  run_command('tar', 'xzf', src_archive, '-C', meson.current_build_dir(), check: true)
+  run_command(
+    python, '-c',
+    'import pathlib, sys, tarfile; pathlib.Path(sys.argv[2]).mkdir(parents=True, exist_ok=True); tarfile.open(sys.argv[1], "r:gz").extractall(sys.argv[2])',
+    src_archive, meson.current_build_dir(),
+    check: true)
 endif
 
 link_args = []
