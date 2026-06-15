@@ -2,6 +2,7 @@ project('dsp56300', version: '0.1.3')
 
 fs = import('fs')
 python = import('python').find_installation()
+cc = meson.get_compiler('c')
 
 host_cpu = host_machine.cpu_family()
 host_os = host_machine.system()
@@ -41,6 +42,16 @@ if host_os == 'linux'
   link_args = ['-lpthread', '-ldl', '-lm']
 elif host_os == 'windows'
   link_args = ['-lbcrypt', '-lntdll', '-luserenv', '-lws2_32']
+  if cc.get_argument_syntax() == 'msvc'
+    gcc_eh = run_command(
+      python, meson.current_source_dir() / 'find-libgcc-eh.py',
+      check: false).stdout().strip()
+    if gcc_eh == ''
+      error('libgcc_eh.a was not found; it is required to link the x86_64-pc-windows-gnu dsp56300 archive with MSVC')
+    endif
+    message('Using MinGW GCC unwind library for dsp56300: ' + gcc_eh)
+    link_args += [gcc_eh]
+  endif
 elif host_os == 'darwin'
   link_args = ['-lpthread', '-lm', '-framework', 'Security']
 endif
