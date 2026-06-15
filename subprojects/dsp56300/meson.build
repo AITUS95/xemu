@@ -1,4 +1,4 @@
-project('dsp56300', version: '0.1.3')
+project('dsp56300', 'c', version: '0.1.3')
 
 fs = import('fs')
 python = import('python').find_installation()
@@ -42,7 +42,7 @@ if host_os == 'linux'
   link_args = ['-lpthread', '-ldl', '-lm']
 elif host_os == 'windows'
   link_args = ['-lbcrypt', '-lntdll', '-luserenv', '-lws2_32']
-  if cc.get_argument_syntax() == 'msvc'
+  if cc.get_linker_id() == 'link'
     gcc_eh = run_command(
       python, meson.current_source_dir() / 'find-libgcc-eh.py',
       check: false).stdout().strip()
