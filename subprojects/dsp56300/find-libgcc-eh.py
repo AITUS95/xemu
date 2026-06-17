@@ -17,6 +17,8 @@ def iter_roots():
     for name in ("MINGW_PREFIX", "MSYSTEM_PREFIX"):
         add_root(roots, os.environ.get(name))
 
+    add_root(roots, Path(__file__).resolve().parents[2] / ".msvc-mingw-cache" / "mingw64")
+
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
             continue
@@ -51,6 +53,12 @@ def iter_roots():
 
 
 def main():
+    for name in ("LIBGCC_EH", "LIBGCC_EH_PATH"):
+        override = os.environ.get(name)
+        if override and Path(override).is_file():
+            print(Path(override).resolve(strict=False).as_posix())
+            return 0
+
     matches = []
     for root in iter_roots():
         for pattern in (

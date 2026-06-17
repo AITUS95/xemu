@@ -24,6 +24,11 @@ $LocalVenv = Join-Path $RepoRoot ".venv-msvc"
 $LocalVcpkgRoot = Join-Path $RepoRoot ".vcpkg-tool"
 $LocalVcpkgDownloads = Join-Path $RepoRoot ".vcpkg-downloads"
 $LocalVcpkgBinaryCache = Join-Path $RepoRoot ".vcpkg-binary-cache"
+$LocalMingwCache = Join-Path $RepoRoot ".msvc-mingw-cache"
+$MingwGccPackageName = "mingw-w64-x86_64-gcc-16.1.0-5-any.pkg.tar.zst"
+$MingwGccPackageUrl = "https://mirror.msys2.org/mingw/mingw64/$MingwGccPackageName"
+$MingwGccPackageSha256 = "10F7C55275F7FBE7924209D61C368A1A6FCF775CFFBDEAC2EEF1F5CCACDD35CD"
+$MingwGccVersion = "16.1.0"
 
 function Write-Step {
     param([string]$Message)
@@ -292,7 +297,7 @@ function Clear-MsvcOutputs {
     }
 
     if ($IncludeReusableCaches) {
-        foreach ($relative in @(".vcpkg-tool", ".vcpkg-downloads", ".vcpkg-binary-cache", ".venv-msvc")) {
+        foreach ($relative in @(".vcpkg-tool", ".vcpkg-downloads", ".vcpkg-binary-cache", ".venv-msvc", ".msvc-mingw-cache")) {
             Remove-RepoPath -RelativePath $relative
         }
     }
@@ -412,6 +417,54 @@ function Ensure-Vcpkg {
     return $vcpkg
 }
 
+function Ensure-MingwLibgccEh {
+    $mingwPrefix = Join-Path $LocalMingwCache "mingw64"
+    $gccLibDir = Join-Path $mingwPrefix "lib\gcc\x86_64-w64-mingw32\$MingwGccVersion"
+    $libgccEh = Join-Path $gccLibDir "libgcc_eh.a"
+    $packagePath = Join-Path $LocalMingwCache $MingwGccPackageName
+
+    if (-not (Test-Path -LiteralPath $libgccEh)) {
+        New-Item -ItemType Directory -Force -Path $LocalMingwCache | Out-Null
+
+        if (-not (Test-Path -LiteralPath $packagePath)) {
+            Write-Step "Downloading MinGW GCC unwind library package"
+            try {
+                Invoke-WebRequest -Uri $MingwGccPackageUrl -OutFile $packagePath
+            } catch {
+                if (Test-Path -LiteralPath $packagePath) {
+                    Remove-Item -LiteralPath $packagePath -Force
+                }
+                throw "Failed to download $MingwGccPackageUrl. Check internet access, proxy/firewall settings, or install MSYS2 mingw-w64-x86_64-gcc and set MINGW_PREFIX."
+            }
+        }
+
+        $hash = (Get-FileHash -Path $packagePath -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($hash -ne $MingwGccPackageSha256) {
+            Remove-Item -LiteralPath $packagePath -Force
+            throw "SHA256 mismatch for $MingwGccPackageName. Expected $MingwGccPackageSha256 but got $hash."
+        }
+
+        Write-Step "Extracting MinGW GCC unwind library"
+        $members = @(
+            "mingw64/lib/gcc/x86_64-w64-mingw32/$MingwGccVersion/libgcc_eh.a",
+            "mingw64/lib/gcc/x86_64-w64-mingw32/$MingwGccVersion/libgcc.a"
+        )
+        $tarArgs = @("-xf", $packagePath, "-C", $LocalMingwCache) + $members
+        Invoke-NativeCommand `
+            -FilePath "tar.exe" `
+            -Arguments $tarArgs `
+            -FailureMessage "Failed to extract libgcc_eh.a from $MingwGccPackageName." `
+            -FailureHint "Ensure Windows tar.exe supports .zst archives, or install MSYS2 mingw-w64-x86_64-gcc and set MINGW_PREFIX." | Out-Null
+
+        if (-not (Test-Path -LiteralPath $libgccEh)) {
+            throw "libgcc_eh.a was not extracted to $libgccEh."
+        }
+    }
+
+    $env:MINGW_PREFIX = $mingwPrefix
+    return $libgccEh
+}
+
 function Invoke-MsvcProbe {
     param([string]$ConfigName)
 
@@ -490,6 +543,7 @@ try {
     Test-MsvcToolchain
     Ensure-PythonTools | Out-Null
     $vcpkg = Ensure-Vcpkg
+    $mingwLibgccEh = Ensure-MingwLibgccEh
 
     Write-Host "MSVC local build environment"
     Write-Host "Repository:              $RepoRoot"
@@ -499,6 +553,8 @@ try {
     Write-Host "VCPKG_DOWNLOADS:         $env:VCPKG_DOWNLOADS"
     Write-Host "VCPKG_DEFAULT_BINARY_CACHE: $env:VCPKG_DEFAULT_BINARY_CACHE"
     Write-Host "vcpkg.exe:               $vcpkg"
+    Write-Host "MINGW_PREFIX:            $env:MINGW_PREFIX"
+    Write-Host "libgcc_eh.a:             $mingwLibgccEh"
 
     if ($CheckOnly) {
         Write-Step "CheckOnly completed"

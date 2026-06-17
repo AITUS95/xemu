@@ -1641,6 +1641,7 @@ $markerData = [ordered]@{
         configure = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "configure")
         meson_build = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "meson.build")
         meson_options = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "meson_options.txt")
+        dsp56300_meson_build = Get-OptionalFileSha256 -Path (Join-Path $repoRoot "subprojects\dsp56300\meson.build")
         probe_script = Get-OptionalFileSha256 -Path $PSCommandPath
         wrapper_script = Get-OptionalFileSha256 -Path $wrapperPy
     }

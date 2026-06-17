@@ -37,6 +37,25 @@ if not fs.exists(lib)
     check: true)
 endif
 
+if host_os == 'windows' and cc.get_linker_id() == 'link'
+  objcopy = find_program('llvm-objcopy', 'llvm-objcopy.exe', required: false)
+  if objcopy.found()
+    stripped_lib = meson.current_build_dir() / 'libdsp56300_emu_ffi-msvc-stripped.a'
+    if not fs.exists(stripped_lib)
+      run_command(
+        python, '-c',
+        'import shutil, sys; shutil.copyfile(sys.argv[1], sys.argv[2])',
+        lib, stripped_lib,
+        check: true)
+      run_command(objcopy, '--strip-debug', stripped_lib, check: true)
+    endif
+    lib = stripped_lib
+    message('Using MSVC-stripped dsp56300 archive: ' + lib)
+  else
+    warning('llvm-objcopy was not found; lld-link may warn about DWARF section names from dsp56300')
+  endif
+endif
+
 link_args = []
 if host_os == 'linux'
   link_args = ['-lpthread', '-ldl', '-lm']

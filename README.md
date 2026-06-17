@@ -41,7 +41,8 @@ PDB generation; full runtime validation is a separate manual step.
 Install these manually before building on Windows:
 
 - Visual Studio 2026 or Build Tools for Visual Studio 2026 with the C++ x64 tools.
-- C++ Clang tools for Windows, providing `clang-cl.exe`.
+- C++ Clang tools for Windows, providing `clang-cl.exe` and LLVM utilities such
+  as `llvm-objcopy.exe`.
 - Windows SDK, providing `rc.exe` and `midl.exe`.
 - Git for Windows, providing `git.exe`, `bash.exe`, and `sh.exe`.
 - Python 3 available as `python.exe`.
@@ -53,8 +54,10 @@ The local wrapper can prepare these inside the repository:
   already available.
 - `.vcpkg-downloads` for vcpkg downloads.
 - `.vcpkg-binary-cache` for vcpkg binary packages.
+- `.msvc-mingw-cache` for the MSYS2 MinGW GCC package used to provide
+  `libgcc_eh.a` for the prebuilt `dsp56300` archive.
 - vcpkg packages needed by the build: `pkgconf`, `glib`, `pixman`, `libepoxy`,
-  `libsamplerate`, and `vulkan-headers`.
+  `libsamplerate`, `libslirp`, and `vulkan-headers`.
 
 The vcpkg copy bundled inside Visual Studio is not used because it may not
 support classic mode installs. Use a standalone vcpkg checkout through
@@ -144,6 +147,7 @@ Reusable caches speed up future builds:
 - `.vcpkg-tool`
 - `.vcpkg-downloads`
 - `.vcpkg-binary-cache`
+- `.msvc-mingw-cache`
 
 After a successful build, `-CleanIntermediates` removes build trees and logs but
 keeps `msvc-artifacts/<config>` and does not remove artifacts from other
@@ -307,6 +311,16 @@ Visual Studio bundled vcpkg is rejected
 
 Use a standalone vcpkg checkout. The bundled Visual Studio vcpkg can report that
 it has no classic mode instance.
+
+`libgcc_eh.a was not found`
+
+The prebuilt `dsp56300` archive targets `x86_64-pc-windows-gnu` and needs the
+MinGW GCC unwind library when linked into the MSVC build. `build-msvc.ps1`
+downloads a pinned MSYS2 MinGW GCC package into `.msvc-mingw-cache`, verifies
+its SHA256, and extracts the required archive. If this fails, check internet
+access, proxy/firewall settings, Windows `tar.exe` support for `.zst` archives,
+or provide an existing MinGW install with `MINGW_PREFIX`, `LIBGCC_EH`, or
+`LIBGCC_EH_PATH`.
 
 Paths with spaces
 
