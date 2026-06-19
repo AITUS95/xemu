@@ -558,8 +558,7 @@ static ShaderState get_shader_state_for_vk(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     ShaderState state = pgraph_glsl_get_shader_state(pg);
 
-    if (samples_scaled_surface_texture(r) && !uses_depth_stencil(pg) &&
-        !state.vsh.is_fixed_function) {
+    if (samples_scaled_surface_texture(r)) {
         state.vsh.apply_scaled_pixel_center_bias = false;
     }
 
