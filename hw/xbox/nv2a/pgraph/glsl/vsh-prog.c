@@ -755,9 +755,10 @@ void pgraph_glsl_gen_vsh_prog(uint16_t version, const uint32_t *tokens,
          * in clip space.
          */
         "  oPos.xy = roundScreenCoords(oPos.xy);\n"
+        "  vec2 rasterPos = applyScaledPixelCenterBias(oPos.xy);\n"
         "  oPos.w = clampAwayZeroInf(oPos.w);\n"
         "  vec4 vtxPos = oPos;\n"
-        "  oPos.xy = (2.0f * oPos.xy - surfaceSize) / surfaceSize;\n"
+        "  oPos.xy = (2.0f * rasterPos - surfaceSize) / surfaceSize;\n"
         "  oPos.z = oPos.z / clipRange.y;\n"
 
         /* Undo perspective divide by w.

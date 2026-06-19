@@ -224,13 +224,21 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
         "vec4 NaNToValue(vec4 src, float replacement) {\n"
         "  return mix(src, vec4(replacement), isnan(src));\n"
         "}\n"
-        "\n"
-        // Xbox NV2A rasterizer appears to have 4 bit precision fixed-point
-        // fractional part and to convert floating-point coordinates by
-        // by truncating (not flooring).
+        "\n");
+
+    // Xbox NV2A rasterizer appears to have 4 bit precision fixed-point
+    // fractional part and to convert floating-point coordinates by
+    // truncating (not flooring).
+    mstring_append_fmt(header,
         "vec2 roundScreenCoords(vec2 pos) {\n"
         "  return trunc(pos * 16.0f) / 16.0f;\n"
-        "}\n");
+        "}\n"
+        "vec2 applyScaledPixelCenterBias(vec2 pos) {\n"
+        "  const float surfaceScaleFactor = %u.0f;\n"
+        "  const float pixelCenterBias = 0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor;\n"
+        "  return pos - vec2(pixelCenterBias);\n"
+        "}\n",
+        state->surface_scale_factor);
 
     pgraph_glsl_get_vtx_header(header, opts.vulkan, state->smooth_shading,
                                false, opts.prefix_outputs, false);
