@@ -91,6 +91,8 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
                  NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN) ==
         NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CULL;
 
+    state->surface_scale_factor = pg->surface_scale_factor;
+
     int num_stages = pgraph_reg_r(pg, NV_PGRAPH_COMBINECTL) & 0xFF;
     for (int i = 0; i < num_stages; i++) {
         state->rgb_inputs[i] =
@@ -850,6 +852,14 @@ static MString* psh_convert(struct PixelShader *ps)
         mstring_append(preflight, "};\n");
     }
 
+    mstring_append_fmt(
+        preflight,
+        "vec2 scaledPixelCenterBias(void) {\n"
+        "  const float surfaceScaleFactor = %u.0f;\n"
+        "  return vec2(0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor);\n"
+        "}\n",
+        ps->state->surface_scale_factor);
+
     const char *dotmap_funcs[] = {
         "dotmap_zero_to_one",
         "dotmap_minus1_to_1_d3d",
@@ -1006,7 +1016,7 @@ static MString* psh_convert(struct PixelShader *ps)
     if (ps->state->z_perspective) {
         mstring_append(
             clip,
-            "vec2 unscaled_xy = gl_FragCoord.xy / surfaceScale;\n"
+            "vec2 unscaled_xy = gl_FragCoord.xy / vec2(surfaceScale) + scaledPixelCenterBias();\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"
@@ -1040,7 +1050,7 @@ static MString* psh_convert(struct PixelShader *ps)
     } else {
         mstring_append(
             clip,
-            "vec2 unscaled_xy = gl_FragCoord.xy / surfaceScale;\n"
+            "vec2 unscaled_xy = gl_FragCoord.xy / vec2(surfaceScale) + scaledPixelCenterBias();\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"

@@ -70,6 +70,7 @@ typedef struct PshState {
     bool depth_clipping;
     bool z_perspective;
 
+    unsigned int surface_scale_factor;
     unsigned int surface_zeta_format;
     enum PshDepthFormat depth_format;
 } PshState;
