@@ -242,7 +242,7 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
         "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
         "  return pos - bias;\n"
         "}\n",
-        state->surface_scale_factor);
+        state->z_perspective ? state->surface_scale_factor : 1);
 
     pgraph_glsl_get_vtx_header(header, opts.vulkan, state->smooth_shading,
                                false, opts.prefix_outputs, false);
