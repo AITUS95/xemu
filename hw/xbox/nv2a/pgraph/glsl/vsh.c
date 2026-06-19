@@ -110,6 +110,7 @@ void pgraph_glsl_set_vsh_state(PGRAPHState *pg, VshState *vsh)
     assert(vertex_program || fixed_function);
 
     vsh->surface_scale_factor = pg->surface_scale_factor; // FIXME
+    vsh->apply_scaled_pixel_center_bias = true;
 
     vsh->compressed_attrs = pg->compressed_attrs;
     vsh->uniform_attrs = pg->uniform_attrs;
@@ -242,7 +243,7 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
         "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
         "  return pos - bias;\n"
         "}\n",
-        state->z_perspective ? state->surface_scale_factor : 1);
+        state->apply_scaled_pixel_center_bias ? state->surface_scale_factor : 1);
 
     pgraph_glsl_get_vtx_header(header, opts.vulkan, state->smooth_shading,
                                false, opts.prefix_outputs, false);

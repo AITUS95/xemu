@@ -531,6 +531,31 @@ static ShaderBinding *get_shader_binding_for_state(PGRAPHVkState *r,
     return binding;
 }
 
+static bool samples_scaled_surface_texture(PGRAPHVkState *r)
+{
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        TextureBinding *binding = r->texture_bindings[i];
+        if (binding && binding->key.scale > 1.0f) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static ShaderState get_shader_state_for_vk(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    ShaderState state = pgraph_glsl_get_shader_state(pg);
+
+    if (samples_scaled_surface_texture(r)) {
+        state.vsh.apply_scaled_pixel_center_bias = false;
+        state.psh.apply_scaled_pixel_center_bias = false;
+    }
+
+    return state;
+}
+
 static void apply_uniform_updates(ShaderUniformLayout *layout,
                                   const UniformInfo *info, int *locs,
                                   void *values, size_t count)
@@ -593,17 +618,11 @@ void pgraph_vk_bind_shaders(PGRAPHState *pg)
 
     r->shader_bindings_changed = false;
 
-    bool shader_state_dirty =
-        !r->shader_binding ||
-        pgraph_glsl_check_shader_state_dirty(pg, &r->shader_binding->state);
-
-    if (shader_state_dirty) {
-        ShaderState new_state = pgraph_glsl_get_shader_state(pg);
-        if (!r->shader_binding || memcmp(&r->shader_binding->state, &new_state,
-                                         sizeof(ShaderState))) {
-            r->shader_binding = get_shader_binding_for_state(r, &new_state);
-            r->shader_bindings_changed = true;
-        }
+    ShaderState new_state = get_shader_state_for_vk(pg);
+    if (!r->shader_binding || memcmp(&r->shader_binding->state, &new_state,
+                                     sizeof(ShaderState))) {
+        r->shader_binding = get_shader_binding_for_state(r, &new_state);
+        r->shader_bindings_changed = true;
     } else {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND_NOTDIRTY);
     }

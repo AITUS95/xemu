@@ -71,6 +71,7 @@ typedef struct PshState {
     bool z_perspective;
 
     unsigned int surface_scale_factor;
+    bool apply_scaled_pixel_center_bias;
     unsigned int surface_zeta_format;
     enum PshDepthFormat depth_format;
 } PshState;

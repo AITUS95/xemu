@@ -92,6 +92,7 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
         NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CULL;
 
     state->surface_scale_factor = pg->surface_scale_factor;
+    state->apply_scaled_pixel_center_bias = true;
 
     int num_stages = pgraph_reg_r(pg, NV_PGRAPH_COMBINECTL) & 0xFF;
     for (int i = 0; i < num_stages; i++) {
@@ -862,7 +863,8 @@ static MString* psh_convert(struct PixelShader *ps)
         "    (pos.x > edgeGuard && pos.x < surfaceSize.x - edgeGuard) ? pixelCenterBias : 0.0f,\n"
         "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
         "}\n",
-        ps->state->z_perspective ? ps->state->surface_scale_factor : 1);
+        ps->state->apply_scaled_pixel_center_bias ?
+            ps->state->surface_scale_factor : 1);
 
     const char *dotmap_funcs[] = {
         "dotmap_zero_to_one",
