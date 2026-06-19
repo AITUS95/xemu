@@ -236,7 +236,11 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
         "vec2 applyScaledPixelCenterBias(vec2 pos) {\n"
         "  const float surfaceScaleFactor = %u.0f;\n"
         "  const float pixelCenterBias = 0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor;\n"
-        "  return pos - vec2(pixelCenterBias);\n"
+        "  const float edgeGuard = 0.5f;\n"
+        "  vec2 bias = vec2(\n"
+        "    (pos.x > edgeGuard && pos.x < surfaceSize.x - edgeGuard) ? pixelCenterBias : 0.0f,\n"
+        "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
+        "  return pos - bias;\n"
         "}\n",
         state->surface_scale_factor);
 
