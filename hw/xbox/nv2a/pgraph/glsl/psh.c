@@ -91,9 +91,6 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
                  NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN) ==
         NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CULL;
 
-    state->surface_scale_factor = pg->surface_scale_factor;
-    state->apply_scaled_pixel_center_bias = true;
-
     int num_stages = pgraph_reg_r(pg, NV_PGRAPH_COMBINECTL) & 0xFF;
     for (int i = 0; i < num_stages; i++) {
         state->rgb_inputs[i] =
@@ -853,19 +850,6 @@ static MString* psh_convert(struct PixelShader *ps)
         mstring_append(preflight, "};\n");
     }
 
-    mstring_append_fmt(
-        preflight,
-        "vec2 scaledPixelCenterBias(vec2 pos) {\n"
-        "  const float surfaceScaleFactor = %u.0f;\n"
-        "  const float pixelCenterBias = 0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor;\n"
-        "  const float edgeGuard = 0.5f;\n"
-        "  return vec2(\n"
-        "    (pos.x > edgeGuard && pos.x < surfaceSize.x - edgeGuard) ? pixelCenterBias : 0.0f,\n"
-        "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
-        "}\n",
-        ps->state->apply_scaled_pixel_center_bias ?
-            ps->state->surface_scale_factor : 1);
-
     const char *dotmap_funcs[] = {
         "dotmap_zero_to_one",
         "dotmap_minus1_to_1_d3d",
@@ -1023,7 +1007,6 @@ static MString* psh_convert(struct PixelShader *ps)
         mstring_append(
             clip,
             "vec2 unscaled_xy = gl_FragCoord.xy / vec2(surfaceScale);\n"
-            "unscaled_xy += scaledPixelCenterBias(unscaled_xy);\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"
@@ -1058,7 +1041,6 @@ static MString* psh_convert(struct PixelShader *ps)
         mstring_append(
             clip,
             "vec2 unscaled_xy = gl_FragCoord.xy / vec2(surfaceScale);\n"
-            "unscaled_xy += scaledPixelCenterBias(unscaled_xy);\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"
@@ -1782,15 +1764,6 @@ void pgraph_glsl_set_psh_uniform_values(PGRAPHState *pg,
         pgraph_apply_scaling_factor(pg, &wscale, &hscale);
         values->surfaceScale[0][0] = wscale;
         values->surfaceScale[0][1] = hscale;
-    }
-
-    if (locs[PshUniform_surfaceSize] != -1) {
-        unsigned int aa_width = 1, aa_height = 1;
-        pgraph_apply_anti_aliasing_factor(pg, &aa_width, &aa_height);
-        values->surfaceSize[0][0] =
-            (float)pg->surface_binding_dim.width / aa_width;
-        values->surfaceSize[0][1] =
-            (float)pg->surface_binding_dim.height / aa_height;
     }
 
     unsigned int max_gl_width = pg->surface_binding_dim.width;

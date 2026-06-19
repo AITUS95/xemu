@@ -231,17 +231,14 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
     // fractional part and to convert floating-point coordinates by
     // truncating (not flooring).
     mstring_append_fmt(header,
-        "vec2 roundScreenCoords(vec2 pos) {\n"
-        "  return trunc(pos * 16.0f) / 16.0f;\n"
-        "}\n"
-        "vec2 applyScaledPixelCenterBias(vec2 pos) {\n"
+        "vec2 scaledPixelCenterBias(vec2 pos) {\n"
         "  const float surfaceScaleFactor = %u.0f;\n"
         "  const float pixelCenterBias = 0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor;\n"
-        "  const float edgeGuard = 0.5f;\n"
-        "  vec2 bias = vec2(\n"
-        "    (pos.x > edgeGuard && pos.x < surfaceSize.x - edgeGuard) ? pixelCenterBias : 0.0f,\n"
-        "    (pos.y > edgeGuard && pos.y < surfaceSize.y - edgeGuard) ? pixelCenterBias : 0.0f);\n"
-        "  return pos - bias;\n"
+        "  return vec2(pixelCenterBias);\n"
+        "}\n"
+        "vec2 roundScreenCoords(vec2 pos) {\n"
+        "  vec2 rounded = trunc(pos * 16.0f) / 16.0f;\n"
+        "  return rounded - scaledPixelCenterBias(rounded);\n"
         "}\n",
         state->apply_scaled_pixel_center_bias ? state->surface_scale_factor : 1);
 

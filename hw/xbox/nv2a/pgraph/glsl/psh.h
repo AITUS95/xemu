@@ -70,8 +70,6 @@ typedef struct PshState {
     bool depth_clipping;
     bool z_perspective;
 
-    unsigned int surface_scale_factor;
-    bool apply_scaled_pixel_center_bias;
     unsigned int surface_zeta_format;
     enum PshDepthFormat depth_format;
 } PshState;
@@ -91,7 +89,6 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state);
     DECL(S, depthFactor, float, 1)  \
     DECL(S, depthOffset, float, 1)  \
     DECL(S, fogColor, vec4, 1)      \
-    DECL(S, surfaceSize, vec2, 1)   \
     DECL(S, surfaceScale, ivec2, 1) \
     DECL(S, texScale, float, 4)
 
