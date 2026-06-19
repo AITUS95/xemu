@@ -543,12 +543,22 @@ static bool samples_scaled_surface_texture(PGRAPHVkState *r)
     return false;
 }
 
+static bool uses_depth_stencil(PGRAPHState *pg)
+{
+    uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
+    uint32_t control_1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
+
+    return (control_0 & NV_PGRAPH_CONTROL_0_ZENABLE) ||
+           pgraph_zeta_write_enabled(pg) ||
+           (control_1 & NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE);
+}
+
 static ShaderState get_shader_state_for_vk(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     ShaderState state = pgraph_glsl_get_shader_state(pg);
 
-    if (samples_scaled_surface_texture(r)) {
+    if (samples_scaled_surface_texture(r) && !uses_depth_stencil(pg)) {
         state.vsh.apply_scaled_pixel_center_bias = false;
         state.psh.apply_scaled_pixel_center_bias = false;
     }
