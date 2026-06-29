@@ -183,6 +183,7 @@ typedef struct PGRAPHGLState {
     GLuint gl_memory_buffer;
     GLuint gl_vertex_array;
     GLuint gl_inline_buffer[NV2A_VERTEXSHADER_ATTRIBUTES];
+    uint16_t gl_enabled_vertex_attributes;
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     SurfaceBinding *color_binding, *zeta_binding;
@@ -245,6 +246,22 @@ typedef struct PGRAPHGLState {
     PshUniformValues prev_psh_values;
     bool uniform_cache_valid;
 } PGRAPHGLState;
+
+static inline void pgraph_gl_set_vertex_attrib_array(PGRAPHGLState *r,
+                                                     unsigned int index,
+                                                     bool enabled)
+{
+    uint16_t mask = 1u << index;
+    if (enabled) {
+        if (!(r->gl_enabled_vertex_attributes & mask)) {
+            glEnableVertexAttribArray(index);
+            r->gl_enabled_vertex_attributes |= mask;
+        }
+    } else if (r->gl_enabled_vertex_attributes & mask) {
+        glDisableVertexAttribArray(index);
+        r->gl_enabled_vertex_attributes &= ~mask;
+    }
+}
 
 extern GloContext *g_nv2a_context_render;
 extern GloContext *g_nv2a_context_display;

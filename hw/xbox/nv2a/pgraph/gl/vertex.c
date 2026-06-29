@@ -85,7 +85,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
         VertexAttribute *attr = &pg->vertex_attributes[i];
 
         if (!attr->count) {
-            glDisableVertexAttribArray(i);
+            pgraph_gl_set_vertex_attrib_array(r, i, false);
             glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
@@ -174,7 +174,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
             // Stride of 0 indicates that only the first element should be
             // used.
             pgraph_update_inline_value(attr, last_entry);
-            glDisableVertexAttribArray(i);
+            pgraph_gl_set_vertex_attrib_array(r, i, false);
             glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
@@ -187,7 +187,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
                                   (void *)attrib_data_addr);
         }
 
-        glEnableVertexAttribArray(i);
+        pgraph_gl_set_vertex_attrib_array(r, i, true);
         last_entry += stride * provoking_element_index;
         pgraph_update_inline_value(attr, last_entry);
     }
@@ -211,7 +211,7 @@ void pgraph_gl_bind_vertex_attributes_from_vram_snapshot(
         VertexAttribute *attr = &pg->vertex_attributes[i];
 
         if (!attr->count) {
-            glDisableVertexAttribArray(i);
+            pgraph_gl_set_vertex_attrib_array(r, i, false);
             glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
@@ -280,7 +280,7 @@ void pgraph_gl_bind_vertex_attributes_from_vram_snapshot(
 
         if (!stride) {
             pgraph_update_inline_value(attr, last_entry);
-            glDisableVertexAttribArray(i);
+            pgraph_gl_set_vertex_attrib_array(r, i, false);
             glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
@@ -299,7 +299,7 @@ void pgraph_gl_bind_vertex_attributes_from_vram_snapshot(
                                   0);
         }
 
-        glEnableVertexAttribArray(i);
+        pgraph_gl_set_vertex_attrib_array(r, i, true);
         last_entry += stride * provoking_element_index;
         pgraph_update_inline_value(attr, last_entry);
     }
@@ -391,6 +391,7 @@ void pgraph_gl_init_buffers(NV2AState *d)
 
     glGenVertexArrays(1, &r->gl_vertex_array);
     glBindVertexArray(r->gl_vertex_array);
+    r->gl_enabled_vertex_attributes = 0;
 
     assert(glGetError() == GL_NO_ERROR);
 }
@@ -420,4 +421,5 @@ void pgraph_gl_finalize_buffers(PGRAPHState *pg)
 
     glDeleteVertexArrays(1, &r->gl_vertex_array);
     r->gl_vertex_array = 0;
+    r->gl_enabled_vertex_attributes = 0;
 }

@@ -387,7 +387,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
     if (!(r->color_binding || r->zeta_binding)) {
         return;
     }
-    assert(r->shader_binding);
+    if (!r->shader_binding) {
+        return;
+    }
 
     if (pg->draw_arrays_length) {
         NV2A_GL_DPRINTF(false, "Draw Arrays");
@@ -463,13 +465,13 @@ void pgraph_gl_flush_draw(NV2AState *d)
                              pg->inline_buffer_length * sizeof(float) * 4,
                              attr->inline_buffer, GL_STREAM_DRAW);
                 glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 0, 0);
-                glEnableVertexAttribArray(i);
+                pgraph_gl_set_vertex_attrib_array(r, i, true);
                 attr->inline_buffer_populated = false;
                 memcpy(attr->inline_value,
                        attr->inline_buffer + (pg->inline_buffer_length - 1) * 4,
                        sizeof(attr->inline_value));
             } else {
-                glDisableVertexAttribArray(i);
+                pgraph_gl_set_vertex_attrib_array(r, i, false);
                 glVertexAttrib4fv(i, attr->inline_value);
             }
         }
