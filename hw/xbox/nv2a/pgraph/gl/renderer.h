@@ -77,6 +77,7 @@ typedef struct TextureBinding {
     unsigned int addru;
     unsigned int addrv;
     unsigned int addrp;
+    uint32_t max_anisotropy;
     uint32_t border_color;
     bool border_color_set;
     GLenum gl_target;

@@ -183,9 +183,11 @@ static void apply_texture_parameters(PGRAPHGLState *r,
         needs_border_color = needs_border_color || binding->addrp == NV_PGRAPH_TEXADDRESS0_ADDRU_BORDER;
     }
 
-    if (r->supported_extensions.texture_filter_anisotropic) {
+    if (r->supported_extensions.texture_filter_anisotropic &&
+        max_anisotropy != binding->max_anisotropy) {
         glTexParameterf(binding->gl_target, GL_TEXTURE_MAX_ANISOTROPY_EXT,
                         max_anisotropy);
+        binding->max_anisotropy = max_anisotropy;
     }
 
     if (!is_bordered && needs_border_color) {
@@ -755,6 +757,7 @@ static TextureBinding* generate_texture(const TextureShape s,
     ret->addru = 0xFFFFFFFF;
     ret->addrv = 0xFFFFFFFF;
     ret->addrp = 0xFFFFFFFF;
+    ret->max_anisotropy = 0xFFFFFFFF;
     ret->border_color_set = false;
     return ret;
 }
