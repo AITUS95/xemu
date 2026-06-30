@@ -465,6 +465,85 @@ function Ensure-MingwLibgccEh {
     return $libgccEh
 }
 
+function Get-MsvcIncrementalBuildDirs {
+    param([string]$ConfigName)
+
+    if ($ConfigName -eq "all") {
+        return @("build-msvc", "build-msvc-debug", "build-msvc-profile", "build-msvc-release")
+    }
+
+    return @("build-msvc-$ConfigName")
+}
+
+function Get-MsvcCompilerWrapperHash {
+    $wrapper = Join-Path $RepoRoot "scripts\ci\msvc-cl-wrapper.py"
+    if (-not (Test-Path -LiteralPath $wrapper)) {
+        return $null
+    }
+
+    return (Get-FileHash -LiteralPath $wrapper -Algorithm SHA256).Hash
+}
+
+function Repair-MsvcIncrementalDependencies {
+    param([string]$ConfigName)
+
+    $buildDirs = Get-MsvcIncrementalBuildDirs -ConfigName $ConfigName
+    $wrapperHash = Get-MsvcCompilerWrapperHash
+    if (-not $wrapperHash) {
+        return
+    }
+
+    foreach ($relativeBuildDir in $buildDirs) {
+        $buildDir = Assert-InRepoPath (Join-Path $RepoRoot $relativeBuildDir)
+        if (-not (Test-Path -LiteralPath (Join-Path $buildDir "build.ninja"))) {
+            continue
+        }
+
+        $stamp = Join-Path $buildDir ".msvc-cl-wrapper.sha256"
+        $previousHash = if (Test-Path -LiteralPath $stamp) {
+            (Get-Content -LiteralPath $stamp -Raw).Trim()
+        } else {
+            ""
+        }
+
+        if ($previousHash -eq $wrapperHash) {
+            continue
+        }
+
+        Write-Step "MSVC compiler wrapper changed for $relativeBuildDir; invalidating object files to refresh Ninja header dependencies"
+
+        Get-ChildItem -LiteralPath $buildDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*.obj" -or $_.Name -like "*.obj.d" } |
+            Remove-Item -Force
+
+        foreach ($ninjaState in @(".ninja_deps", ".ninja_log")) {
+            $statePath = Join-Path $buildDir $ninjaState
+            if (Test-Path -LiteralPath $statePath) {
+                Remove-Item -LiteralPath $statePath -Force
+            }
+        }
+
+        Set-Content -LiteralPath $stamp -Value $wrapperHash -Encoding ASCII
+    }
+}
+
+function Write-MsvcIncrementalDependencyStamp {
+    param([string]$ConfigName)
+
+    $wrapperHash = Get-MsvcCompilerWrapperHash
+    if (-not $wrapperHash) {
+        return
+    }
+
+    foreach ($relativeBuildDir in (Get-MsvcIncrementalBuildDirs -ConfigName $ConfigName)) {
+        $buildDir = Assert-InRepoPath (Join-Path $RepoRoot $relativeBuildDir)
+        if (Test-Path -LiteralPath (Join-Path $buildDir "build.ninja")) {
+            Set-Content -LiteralPath (Join-Path $buildDir ".msvc-cl-wrapper.sha256") `
+                -Value $wrapperHash -Encoding ASCII
+        }
+    }
+}
+
 function Invoke-MsvcProbe {
     param([string]$ConfigName)
 
@@ -561,10 +640,14 @@ try {
         exit 0
     }
 
+    Repair-MsvcIncrementalDependencies -ConfigName $configName
+
     $exitCode = Invoke-MsvcProbe -ConfigName $configName
     if ($exitCode -ne 0) {
         throw "MSVC build failed with exit code $exitCode. Check msvc-probe-logs and xemu-msvc-logs."
     }
+
+    Write-MsvcIncrementalDependencyStamp -ConfigName $configName
 
     if ($CleanIntermediates -or $CleanAll) {
         Clear-MsvcOutputs -ConfigName $configName -IncludeArtifacts:$false -IncludeReusableCaches:$CleanAll -KeepBuildTree:$KeepBuildTree

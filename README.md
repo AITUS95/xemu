@@ -106,6 +106,13 @@ compiler, and configure arguments. The wrapper still runs `meson compile`, so
 Ninja decides which files need to be rebuilt. It never skips compilation just
 because `msvc-artifacts/<config>/xemu.exe` already exists.
 
+The MSVC compiler wrapper forwards `clang-cl` dependency-generation flags so
+Ninja tracks included headers, not only the compiled source file. When the
+wrapper itself changes, `build-msvc.ps1` invalidates object files, depfiles, and
+Ninja dependency state for the affected build tree once, then stamps the wrapper
+hash. This keeps later incremental builds reliable after shared header changes
+without requiring a manual Visual Studio Rebuild.
+
 Useful local commands:
 
 ```powershell

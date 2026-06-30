@@ -298,6 +298,7 @@ def translate_args(args, compiler_name=""):
     compile_only = False
     preprocess_only = False
     assemble_only = False
+    dependency_generation = False
     output = None
     depfile = None
     dep_target = None
@@ -349,8 +350,17 @@ def translate_args(args, compiler_name=""):
             output = args[i]
         elif arg.startswith("-o") and len(arg) > 2:
             output = arg[2:]
-        elif arg in {"-MD", "-MMD", "-MP"}:
-            ignore_flag(report, arg)
+        elif arg in {"-MD", "-MMD"}:
+            dependency_generation = True
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:" + arg)
+            else:
+                ignore_flag(report, arg)
+        elif arg == "-MP":
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:-MP")
+            else:
+                ignore_flag(report, arg)
         elif arg in {"-MF", "-MQ", "-MT"}:
             i += 1
             if i >= len(args):
@@ -359,13 +369,23 @@ def translate_args(args, compiler_name=""):
                 depfile = args[i]
             else:
                 dep_target = args[i]
-            ignore_flag(report, f"{arg} {args[i]}")
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, f"{arg} {args[i]}",
+                                  "/clang:" + arg + args[i])
+            else:
+                ignore_flag(report, f"{arg} {args[i]}")
         elif arg.startswith("-MF") and len(arg) > 3:
             depfile = arg[3:]
-            ignore_flag(report, arg)
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:" + arg)
+            else:
+                ignore_flag(report, arg)
         elif arg.startswith(("-MQ", "-MT")) and len(arg) > 3:
             dep_target = arg[3:]
-            ignore_flag(report, arg)
+            if compiler_name.startswith("clang-cl"):
+                append_translated(out, report, arg, "/clang:" + arg)
+            else:
+                ignore_flag(report, arg)
         elif arg == "-include":
             i += 1
             if i >= len(args):
@@ -501,6 +521,14 @@ def translate_args(args, compiler_name=""):
         "target": dep_target or output,
         "sources": source_inputs,
         "is_link": not compile_only and not preprocess_only and not assemble_only,
+        "compiler_writes_depfile": (
+            compiler_name.startswith("clang-cl")
+            and dependency_generation
+            and bool(depfile)
+            and compile_only
+            and not preprocess_only
+            and not assemble_only
+        ),
     }
     return out, report, depinfo
 
@@ -510,6 +538,9 @@ def depfile_escape(value):
 
 
 def write_depfile(depinfo):
+    if depinfo.get("compiler_writes_depfile"):
+        return
+
     depfile = depinfo.get("depfile")
     target = depinfo.get("target")
     if not depfile or not target:
