@@ -270,7 +270,6 @@ unsigned int pgraph_gl_bind_inline_array(NV2AState *d);
 void pgraph_gl_bind_shaders(PGRAPHState *pg);
 void pgraph_gl_bind_textures(NV2AState *d);
 void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element, unsigned int max_element, bool inline_data, unsigned int inline_stride, unsigned int provoking_element);
-void pgraph_gl_bind_vertex_attributes_from_vram_snapshot(NV2AState *d, unsigned int min_element, unsigned int max_element, unsigned int provoking_element);
 bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape);
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src);
 void pgraph_gl_download_dirty_surfaces(NV2AState *d);
