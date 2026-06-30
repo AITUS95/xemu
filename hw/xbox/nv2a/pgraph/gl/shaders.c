@@ -834,9 +834,10 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
 
         void *value = (char*)values + info[i].val_offs;
 
-        if (!force && prev_values) {
-            void *prev = (char*)prev_values + info[i].val_offs;
-            size_t byte_size = info[i].size * info[i].count;
+        size_t byte_size = info[i].size * info[i].count;
+        void *prev = prev_values ? (char*)prev_values + info[i].val_offs : NULL;
+
+        if (!force && prev) {
             if (memcmp(value, prev, byte_size) == 0) {
                 continue;
             }
@@ -873,6 +874,10 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
         default:
             g_assert_not_reached();
         }
+
+        if (prev) {
+            memcpy(prev, value, byte_size);
+        }
     }
 
     assert(glGetError() == GL_NO_ERROR);
@@ -906,8 +911,6 @@ static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding,
                           &psh_values, &r->prev_psh_values,
                           force, PshUniform__COUNT);
 
-    memcpy(&r->prev_vsh_values, &vsh_values, sizeof(vsh_values));
-    memcpy(&r->prev_psh_values, &psh_values, sizeof(psh_values));
     r->uniform_cache_valid = true;
 }
 
