@@ -74,6 +74,58 @@ static inline bool is_power_of_two(unsigned int value)
     return value && !(value & (value - 1));
 }
 
+bool swizzle_offset_to_xy(unsigned int width,
+                          unsigned int height,
+                          unsigned int bytes_per_pixel,
+                          uint64_t byte_offset,
+                          unsigned int *x,
+                          unsigned int *y)
+{
+    if (!is_power_of_two(width) || !is_power_of_two(height) ||
+        !bytes_per_pixel || byte_offset % bytes_per_pixel) {
+        return false;
+    }
+
+    uint64_t pixel_offset = byte_offset / bytes_per_pixel;
+    if (pixel_offset >= (uint64_t)width * height ||
+        pixel_offset > UINT32_MAX) {
+        return false;
+    }
+
+    uint32_t mask_x, mask_y, mask_z;
+    generate_swizzle_masks(width, height, 1, &mask_x, &mask_y, &mask_z);
+    assert(!mask_z);
+
+    uint32_t swizzled = (uint32_t)pixel_offset;
+    uint32_t out_x = 0;
+    uint32_t out_y = 0;
+    uint32_t x_bit = 1;
+    uint32_t y_bit = 1;
+    uint32_t combined_mask = mask_x | mask_y;
+
+    for (uint32_t bit = 1; bit <= combined_mask; bit <<= 1) {
+        if (mask_x & bit) {
+            if (swizzled & bit) {
+                out_x |= x_bit;
+            }
+            x_bit <<= 1;
+        } else if (mask_y & bit) {
+            if (swizzled & bit) {
+                out_y |= y_bit;
+            }
+            y_bit <<= 1;
+        }
+    }
+
+    if (x) {
+        *x = out_x;
+    }
+    if (y) {
+        *y = out_y;
+    }
+    return out_x < width && out_y < height;
+}
+
 /*
  * Keep common pixel copies as byte assignments. MSVC may otherwise leave the
  * hot inner loop with a small memcpy, and wider unaligned stores would make the

@@ -21,6 +21,8 @@
 
 NV2AStats g_nv2a_stats;
 
+static void nv2a_profile_dump_surface_to_texture_counters(void);
+
 void nv2a_profile_increment(void)
 {
     int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
@@ -50,6 +52,7 @@ void nv2a_profile_flip_stall(void)
     g_nv2a_stats.frame_ptr =
         (g_nv2a_stats.frame_ptr + 1) % NV2A_PROF_NUM_FRAMES;
     g_nv2a_stats.frame_count++;
+    nv2a_profile_dump_surface_to_texture_counters();
     memset(&g_nv2a_stats.frame_working, 0, sizeof(g_nv2a_stats.frame_working));
 }
 
@@ -71,4 +74,74 @@ int nv2a_profile_get_counter_value(unsigned int cnt)
     unsigned int idx = (g_nv2a_stats.frame_ptr + NV2A_PROF_NUM_FRAMES - 1) %
                        NV2A_PROF_NUM_FRAMES;
     return g_nv2a_stats.frame_history[idx].counters[cnt];
+}
+
+static void nv2a_profile_dump_surface_to_texture_counters(void)
+{
+    static const unsigned int counters[] = {
+        NV2A_PROF_SURF_DOWNLOAD,
+        NV2A_PROF_SURF_TO_TEX,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK,
+        NV2A_PROF_SURF_TO_TEX_OK,
+        NV2A_PROF_SURF_TO_TEX_NO_SURFACE,
+        NV2A_PROF_SURF_TO_TEX_FAIL_DIM,
+        NV2A_PROF_SURF_TO_TEX_FAIL_PITCH,
+        NV2A_PROF_SURF_TO_TEX_FAIL_OFFSET,
+        NV2A_PROF_SURF_TO_TEX_FAIL_ORIGIN,
+        NV2A_PROF_SURF_TO_TEX_FAIL_BOUNDS,
+        NV2A_PROF_SURF_TO_TEX_FAIL_ZETA,
+        NV2A_PROF_SURF_TO_TEX_ZETA_Z16,
+        NV2A_PROF_SURF_TO_TEX_ZETA_Z24S8,
+        NV2A_PROF_SURF_TO_TEX_ZETA_FIXED,
+        NV2A_PROF_SURF_TO_TEX_ZETA_FLOAT,
+        NV2A_PROF_SURF_TO_TEX_ZETA_TEX_Y16,
+        NV2A_PROF_SURF_TO_TEX_ZETA_TEX_X8Y24,
+        NV2A_PROF_SURF_TO_TEX_ZETA_TEX_OTHER,
+        NV2A_PROF_SURF_TO_TEX_ZETA_OK,
+        NV2A_PROF_SURF_TO_TEX_ZETA_COPY,
+        NV2A_PROF_SURF_TO_TEX_STORAGE_ALLOC,
+        NV2A_PROF_SURF_TO_TEX_STORAGE_REUSE,
+        NV2A_PROF_SURF_TO_TEX_FAIL_CUBEMAP,
+        NV2A_PROF_SURF_TO_TEX_FAIL_MIPMAP,
+        NV2A_PROF_SURF_TO_TEX_FAIL_FORMAT,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_OVERLAP,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_DOWNLOAD,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_CACHE,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_OVERLAP,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_DOWNLOAD,
+        NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_CLEAN,
+    };
+    static const unsigned int num_counters =
+        sizeof(counters) / sizeof(counters[0]);
+    int values[sizeof(counters) / sizeof(counters[0])] = { 0 };
+    unsigned int i, frame;
+    bool any = false;
+
+    if (g_nv2a_stats.frame_count == 0 ||
+        (g_nv2a_stats.frame_count % NV2A_PROF_NUM_FRAMES) != 0) {
+        return;
+    }
+
+    for (frame = 0; frame < NV2A_PROF_NUM_FRAMES; frame++) {
+        for (i = 0; i < num_counters; i++) {
+            values[i] += g_nv2a_stats.frame_history[frame].counters[counters[i]];
+        }
+    }
+
+    for (i = 0; i < num_counters; i++) {
+        any |= values[i] != 0;
+    }
+
+    if (!any) {
+        return;
+    }
+
+    fprintf(stderr, "nv2a-profile: surface-to-texture counters, last %u frames\n",
+            NV2A_PROF_NUM_FRAMES);
+    for (i = 0; i < num_counters; i++) {
+        if (values[i] != 0) {
+            fprintf(stderr, "nv2a-profile:   %s=%d\n",
+                    nv2a_profile_get_counter_name(counters[i]), values[i]);
+        }
+    }
 }

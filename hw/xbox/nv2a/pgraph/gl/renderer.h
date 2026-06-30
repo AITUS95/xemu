@@ -82,6 +82,9 @@ typedef struct TextureBinding {
     bool border_color_set;
     GLenum gl_target;
     GLuint gl_texture;
+    unsigned int render_width;
+    unsigned int render_height;
+    GLint render_internal_format;
 } TextureBinding;
 
 typedef struct ShaderModuleCacheKey {
@@ -217,7 +220,7 @@ typedef struct PGRAPHGLState {
 
     struct s2t_rndr {
         GLuint fbo, vao, vbo, prog;
-        GLuint tex_loc, surface_size_loc;
+        GLuint tex_loc, surface_origin_loc;
     } s2t_rndr;
 
     struct disp_rndr {
@@ -271,7 +274,7 @@ unsigned int pgraph_gl_bind_inline_array(NV2AState *d);
 void pgraph_gl_bind_shaders(PGRAPHState *pg);
 void pgraph_gl_bind_textures(NV2AState *d);
 void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element, unsigned int max_element, bool inline_data, unsigned int inline_stride, unsigned int provoking_element);
-bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape);
+bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape, hwaddr texture_vram_offset, bool texture_uses_mipmaps, unsigned int *source_x, unsigned int *source_y);
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src);
 void pgraph_gl_download_dirty_surfaces(NV2AState *d);
 void pgraph_gl_clear_report_value(NV2AState *d);
@@ -301,7 +304,7 @@ void pgraph_gl_init_buffers(NV2AState *d);
 void pgraph_gl_finalize_buffers(PGRAPHState *pg);
 void pgraph_gl_process_pending_downloads(NV2AState *d);
 void pgraph_gl_reload_surface_scale_factor(PGRAPHState *pg);
-void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface, TextureBinding *texture, TextureShape *texture_shape, int texture_unit);
+void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface, TextureBinding *texture, TextureShape *texture_shape, int texture_unit, unsigned int source_x, unsigned int source_y);
 void pgraph_gl_set_surface_dirty(PGRAPHState *pg, bool color, bool zeta);
 void pgraph_gl_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_gl_surface_get(NV2AState *d, hwaddr addr);
