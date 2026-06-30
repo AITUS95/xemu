@@ -210,40 +210,6 @@ static bool surface_texture_formats_compatible(int surface_fmt,
     return false;
 }
 
-static void count_zeta_surface_to_texture(const SurfaceBinding *surface,
-                                          const TextureShape *shape)
-{
-    switch (surface->shape.zeta_format) {
-    case NV097_SET_SURFACE_FORMAT_ZETA_Z16:
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_Z16);
-        break;
-    case NV097_SET_SURFACE_FORMAT_ZETA_Z24S8:
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_Z24S8);
-        break;
-    default:
-        break;
-    }
-
-    nv2a_profile_inc_counter(surface->shape.z_format ?
-                             NV2A_PROF_SURF_TO_TEX_ZETA_FLOAT :
-                             NV2A_PROF_SURF_TO_TEX_ZETA_FIXED);
-
-    switch (shape->color_format) {
-    case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_DEPTH_Y16_FIXED:
-    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_Y16_FIXED:
-    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_Y16_FLOAT:
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_TEX_Y16);
-        break;
-    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_X8_Y24_FIXED:
-    case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_X8_Y24_FLOAT:
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_TEX_X8Y24);
-        break;
-    default:
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_TEX_OTHER);
-        break;
-    }
-}
-
 static bool zeta_surface_texture_formats_compatible(
     const SurfaceBinding *surface,
     const TextureShape *shape)
@@ -309,7 +275,6 @@ static void ensure_render_texture_storage(TextureBinding *texture,
     if (texture->render_width == width &&
         texture->render_height == height &&
         texture->render_internal_format == internal_format) {
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_STORAGE_REUSE);
         return;
     }
 
@@ -318,7 +283,6 @@ static void ensure_render_texture_storage(TextureBinding *texture,
     texture->render_width = width;
     texture->render_height = height;
     texture->render_internal_format = internal_format;
-    nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_STORAGE_ALLOC);
 }
 
 static void copy_zeta_surface_to_texture(NV2AState *d,
@@ -382,8 +346,6 @@ static void copy_zeta_surface_to_texture(NV2AState *d,
     glBindTexture(texture->gl_target, texture->gl_texture);
     glUseProgram(
         r->shader_binding ? r->shader_binding->gl_program : 0);
-
-    nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_COPY);
 }
 
 static void render_surface_to(NV2AState *d, SurfaceBinding *surface,
@@ -541,18 +503,15 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
     if (!shape->width || !shape->height ||
         surface->width < shape->width ||
         surface->height < shape->height) {
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_DIM);
         return false;
     }
 
     if (!surface->swizzle && surface->pitch != shape->pitch) {
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_PITCH);
         return false;
     }
 
     if (texture_vram_offset < surface->vram_addr ||
         !surface->pitch || !surface->fmt.bytes_per_pixel) {
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_OFFSET);
         return false;
     }
 
@@ -564,22 +523,18 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
             if (!swizzle_offset_to_xy(surface->width, surface->height,
                                       surface->fmt.bytes_per_pixel,
                                       texture_offset, &origin_x, &origin_y)) {
-                nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_ORIGIN);
                 return false;
             }
             if (origin_x % shape->width || origin_y % shape->height) {
-                nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_ORIGIN);
                 return false;
             }
         } else {
             if (texture_offset % surface->fmt.bytes_per_pixel) {
-                nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_ORIGIN);
                 return false;
             }
 
             hwaddr row_offset = texture_offset % surface->pitch;
             if (row_offset % surface->fmt.bytes_per_pixel) {
-                nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_ORIGIN);
                 return false;
             }
 
@@ -589,14 +544,12 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
 
         if (origin_x + shape->width > surface->width ||
             origin_y + shape->height > surface->height) {
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_BOUNDS);
             return false;
         }
     }
 
     if (!surface->color) {
         // FIXME: Support zeta to color
-        count_zeta_surface_to_texture(surface, shape);
         if (!shape->cubemap &&
             !(shape->levels > 1 && texture_uses_mipmaps) &&
             zeta_surface_texture_formats_compatible(surface, shape)) {
@@ -606,31 +559,25 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
             if (source_y) {
                 *source_y = origin_y;
             }
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_ZETA_OK);
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_OK);
             return true;
         } else {
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_ZETA);
             return false;
         }
     }
 
     if (shape->cubemap) {
         // FIXME: Support rendering surface to cubemap face
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_CUBEMAP);
         return false;
     }
 
     if (shape->levels > 1 && texture_uses_mipmaps) {
         // FIXME: Support rendering surface to mip levels.
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_MIPMAP);
         return false;
     }
 
     int surface_fmt = surface->shape.color_format;
     int texture_fmt = shape->color_format;
     if (!surface_texture_formats_compatible(surface_fmt, texture_fmt)) {
-        nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FAIL_FORMAT);
         trace_nv2a_pgraph_surface_texture_compat_failed(
             surface_fmt, texture_fmt);
         return false;
@@ -642,7 +589,6 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
     if (source_y) {
         *source_y = origin_y;
     }
-    nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_OK);
     return true;
 }
 

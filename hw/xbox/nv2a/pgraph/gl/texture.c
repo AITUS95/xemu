@@ -323,8 +323,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
             if (surf_to_tex && surface->upload_pending) {
                 pgraph_gl_upload_surface_data(d, surface, false);
             }
-        } else {
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_NO_SURFACE);
         }
 
         if (!surf_to_tex) {
@@ -339,19 +337,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
                 bool overlapping = !(overlap_surface->vram_addr >= tex_vram_end
                                      || texture_vram_offset >= surf_vram_end);
                 if (overlapping) {
-                    nv2a_profile_inc_counter(
-                        NV2A_PROF_SURF_TO_TEX_FALLBACK_OVERLAP);
-                    if (overlap_surface->draw_dirty) {
-                        nv2a_profile_inc_counter(
-                            NV2A_PROF_SURF_TO_TEX_FALLBACK_DOWNLOAD);
-                    }
-                    if (!overlap_surface->color) {
-                        nv2a_profile_inc_counter(
-                            NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_OVERLAP);
-                        nv2a_profile_inc_counter(overlap_surface->draw_dirty ?
-                            NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_DOWNLOAD :
-                            NV2A_PROF_SURF_TO_TEX_FALLBACK_ZETA_CLEAN);
-                    }
                     pgraph_gl_surface_download_if_dirty(d, overlap_surface);
                 }
             }
@@ -427,7 +412,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
         TextureBinding *binding = key_out->binding;
         if (!surf_to_tex && texture_surface &&
             !texture_surface->upload_pending) {
-            nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX_FALLBACK_CACHE);
             binding->draw_time = texture_surface->draw_time;
         }
         binding->refcnt++;
