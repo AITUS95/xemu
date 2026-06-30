@@ -30,8 +30,6 @@ static void update_memory_buffer(NV2AState *d, hwaddr addr, hwaddr size,
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    glBindBuffer(GL_ARRAY_BUFFER, r->gl_memory_buffer);
-
     hwaddr end = TARGET_PAGE_ALIGN(addr + size);
     addr &= TARGET_PAGE_MASK;
     assert(end < memory_region_size(d->vram));
@@ -42,6 +40,8 @@ static void update_memory_buffer(NV2AState *d, hwaddr addr, hwaddr size,
     }
     last_addr = addr;
     last_end = end;
+
+    glBindBuffer(GL_ARRAY_BUFFER, r->gl_memory_buffer);
 
     size = end - addr;
     if (memory_region_test_and_clear_dirty(d->vram, addr, size,
