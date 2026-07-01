@@ -1057,8 +1057,8 @@ void physical_memory_dirty_bits_cleared(ram_addr_t start, ram_addr_t length)
     }
 }
 
-static bool physical_memory_get_dirty(ram_addr_t start, ram_addr_t length,
-                                      unsigned client)
+bool physical_memory_get_dirty(ram_addr_t start, ram_addr_t length,
+                               unsigned client)
 {
     DirtyMemoryBlocks *blocks;
     unsigned long end, page;

@@ -2162,6 +2162,13 @@ bool memory_region_test_and_clear_dirty(MemoryRegion *mr, hwaddr addr,
                                         hwaddr size, unsigned client);
 
 /**
+ * memory_region_get_dirty: Test whether a range contains dirty pages without
+ * clearing them.
+ */
+bool memory_region_get_dirty(MemoryRegion *mr, hwaddr addr,
+                             hwaddr size, unsigned client);
+
+/**
  * memory_region_set_client_dirty: Mark a range of bytes as dirty
  *                                 in a memory region for a specified client.
  *
