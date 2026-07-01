@@ -202,8 +202,6 @@ typedef struct PGRAPHGLState {
     uint16_t gl_enabled_vertex_attributes;
     VertexAttribPointerState
         gl_vertex_attrib_pointer[NV2A_VERTEXSHADER_ATTRIBUTES];
-    bool gl_vertex_attrib_value_valid[NV2A_VERTEXSHADER_ATTRIBUTES];
-    float gl_vertex_attrib_value[NV2A_VERTEXSHADER_ATTRIBUTES][4];
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     SurfaceBinding *color_binding, *zeta_binding;
@@ -283,18 +281,6 @@ static inline void pgraph_gl_set_vertex_attrib_array(PGRAPHGLState *r,
     } else if (r->gl_enabled_vertex_attributes & mask) {
         glDisableVertexAttribArray(index);
         r->gl_enabled_vertex_attributes &= ~mask;
-    }
-}
-
-static inline void pgraph_gl_set_vertex_attrib_value(PGRAPHGLState *r,
-                                                     unsigned int index,
-                                                     const float value[4])
-{
-    if (!r->gl_vertex_attrib_value_valid[index] ||
-        memcmp(r->gl_vertex_attrib_value[index], value, 4 * sizeof(float))) {
-        glVertexAttrib4fv(index, value);
-        memcpy(r->gl_vertex_attrib_value[index], value, 4 * sizeof(float));
-        r->gl_vertex_attrib_value_valid[index] = true;
     }
 }
 

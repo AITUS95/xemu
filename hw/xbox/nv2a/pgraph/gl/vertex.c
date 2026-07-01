@@ -159,7 +159,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
 
         if (!attr->count) {
             pgraph_gl_set_vertex_attrib_array(r, i, false);
-            pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
+            glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
 
@@ -246,7 +246,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
             // used.
             pgraph_update_inline_value(attr, last_entry);
             pgraph_gl_set_vertex_attrib_array(r, i, false);
-            pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
+            glVertexAttrib4fv(i, attr->inline_value);
             continue;
         }
 
@@ -351,8 +351,6 @@ void pgraph_gl_init_buffers(NV2AState *d)
     r->gl_enabled_vertex_attributes = 0;
     memset(r->gl_vertex_attrib_pointer, 0,
            sizeof(r->gl_vertex_attrib_pointer));
-    memset(r->gl_vertex_attrib_value_valid, 0,
-           sizeof(r->gl_vertex_attrib_value_valid));
 
     assert(glGetError() == GL_NO_ERROR);
 }
@@ -385,6 +383,4 @@ void pgraph_gl_finalize_buffers(PGRAPHState *pg)
     r->gl_enabled_vertex_attributes = 0;
     memset(r->gl_vertex_attrib_pointer, 0,
            sizeof(r->gl_vertex_attrib_pointer));
-    memset(r->gl_vertex_attrib_value_valid, 0,
-           sizeof(r->gl_vertex_attrib_value_valid));
 }
