@@ -474,7 +474,7 @@ void pgraph_gl_flush_draw(NV2AState *d)
                        sizeof(attr->inline_value));
             } else {
                 pgraph_gl_set_vertex_attrib_array(r, i, false);
-                pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
+                glVertexAttrib4fv(i, attr->inline_value);
             }
         }
 
