@@ -30,31 +30,72 @@
 static TextureBinding* generate_texture(const TextureShape s, const uint8_t *texture_data, const uint8_t *palette_data);
 static void texture_binding_destroy(gpointer data);
 
-struct pgraph_texture_possibly_dirty_struct {
-    hwaddr addr, end;
-};
-
-static void mark_textures_possibly_dirty_visitor(Lru *lru, LruNode *node, void *opaque)
+/* Avoid walking the whole texture LRU on every dirty clear.  Each cleared VRAM
+ * page gets a generation; cached textures compare their backing pages against
+ * the generation they were last validated with. */
+static uint64_t texture_dirty_generation_for_range(PGRAPHGLState *r,
+                                                   hwaddr addr, hwaddr size)
 {
-    struct pgraph_texture_possibly_dirty_struct *test =
-        (struct pgraph_texture_possibly_dirty_struct *)opaque;
+    uint64_t generation = 0;
 
-    struct TextureLruNode *tnode = container_of(node, TextureLruNode, node);
-    if (tnode->binding == NULL || tnode->possibly_dirty) {
-        return;
+    if (!size) {
+        return 0;
     }
 
-    uintptr_t k_tex_addr = tnode->key.texture_vram_offset;
-    uintptr_t k_tex_end = k_tex_addr + tnode->key.texture_length - 1;
-    bool overlapping = !(test->addr > k_tex_end || k_tex_addr > test->end);
+    hwaddr end = TARGET_PAGE_ALIGN(addr + size);
+    addr &= TARGET_PAGE_MASK;
 
-    if (tnode->key.palette_length > 0) {
-        uintptr_t k_pal_addr = tnode->key.palette_vram_offset;
-        uintptr_t k_pal_end = k_pal_addr + tnode->key.palette_length - 1;
-        overlapping |= !(test->addr > k_pal_end || k_pal_addr > test->end);
+    size_t page = addr >> TARGET_PAGE_BITS;
+    size_t page_end = end >> TARGET_PAGE_BITS;
+    assert(page_end <= r->texture_dirty_page_count);
+
+    while (page < page_end) {
+        generation = MAX(generation, r->texture_dirty_pages[page]);
+        page++;
     }
 
-    tnode->possibly_dirty |= overlapping;
+    return generation;
+}
+
+static uint64_t texture_dirty_generation_for_ranges(PGRAPHGLState *r,
+                                                    hwaddr texture_vram_offset,
+                                                    hwaddr length,
+                                                    hwaddr palette_vram_offset,
+                                                    hwaddr palette_length)
+{
+    uint64_t generation = texture_dirty_generation_for_range(
+        r, texture_vram_offset, length);
+
+    if (palette_length > 0) {
+        generation = MAX(generation,
+                         texture_dirty_generation_for_range(
+                             r, palette_vram_offset, palette_length));
+    }
+
+    return generation;
+}
+
+static uint64_t texture_dirty_generation_for_key(PGRAPHGLState *r,
+                                                 const TextureKey *key)
+{
+    return texture_dirty_generation_for_ranges(r, key->texture_vram_offset,
+                                               key->texture_length,
+                                               key->palette_vram_offset,
+                                               key->palette_length);
+}
+
+static bool texture_binding_pages_dirty(PGRAPHGLState *r,
+                                        const TextureBinding *binding,
+                                        hwaddr texture_vram_offset,
+                                        hwaddr length,
+                                        hwaddr palette_vram_offset,
+                                        hwaddr palette_length)
+{
+    return texture_dirty_generation_for_ranges(r, texture_vram_offset,
+                                               length,
+                                               palette_vram_offset,
+                                               palette_length) >
+           binding->dirty_generation;
 }
 
 void pgraph_gl_mark_textures_possibly_dirty(NV2AState *d,
@@ -63,25 +104,36 @@ void pgraph_gl_mark_textures_possibly_dirty(NV2AState *d,
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    hwaddr end = TARGET_PAGE_ALIGN(addr + size) - 1;
+    if (!size) {
+        return;
+    }
+
+    hwaddr end = TARGET_PAGE_ALIGN(addr + size);
     addr &= TARGET_PAGE_MASK;
     assert(end <= memory_region_size(d->vram));
 
-    struct pgraph_texture_possibly_dirty_struct test = {
-        .addr = addr,
-        .end = end,
-    };
+    r->texture_dirty_generation++;
+    if (unlikely(r->texture_dirty_generation == 0)) {
+        memset(r->texture_dirty_pages, 0,
+               r->texture_dirty_page_count * sizeof(*r->texture_dirty_pages));
+        r->texture_dirty_generation = 1;
+    }
 
-    lru_visit_active(&r->texture_cache,
-                     mark_textures_possibly_dirty_visitor,
-                     &test);
+    size_t page = addr >> TARGET_PAGE_BITS;
+    size_t page_end = end >> TARGET_PAGE_BITS;
+    assert(page_end <= r->texture_dirty_page_count);
+
+    while (page < page_end) {
+        r->texture_dirty_pages[page] = r->texture_dirty_generation;
+        page++;
+    }
 }
 
 static bool check_texture_dirty(NV2AState *d, hwaddr addr, hwaddr size)
 {
     hwaddr end = TARGET_PAGE_ALIGN(addr + size);
     addr &= TARGET_PAGE_MASK;
-    assert(end < memory_region_size(d->vram));
+    assert(end <= memory_region_size(d->vram));
     return memory_region_test_and_clear_dirty(d->vram, addr, end - addr,
                                               DIRTY_MEMORY_NV2A_TEX);
 }
@@ -89,9 +141,9 @@ static bool check_texture_dirty(NV2AState *d, hwaddr addr, hwaddr size)
 // Check if any of the pages spanned by the a texture are dirty.
 static bool check_texture_possibly_dirty(NV2AState *d,
                                          hwaddr texture_vram_offset,
-                                         unsigned int length,
+                                         hwaddr length,
                                          hwaddr palette_vram_offset,
-                                         unsigned int palette_length)
+                                         hwaddr palette_length)
 {
     bool possibly_dirty = false;
     if (check_texture_dirty(d, texture_vram_offset, length)) {
@@ -277,7 +329,11 @@ void pgraph_gl_bind_textures(NV2AState *d)
             bool reusable = false;
             if (surface && tbind->draw_time == surface->draw_time) {
                 reusable = true;
-            } else if (!surface) {
+            } else if (!surface &&
+                       !texture_binding_pages_dirty(
+                           r, tbind, texture_vram_offset, length,
+                           palette_vram_offset,
+                           is_indexed ? palette_length : 0)) {
                 possibly_dirty = check_texture_possibly_dirty(
                         d,
                         texture_vram_offset,
@@ -365,6 +421,12 @@ void pgraph_gl_bind_textures(NV2AState *d)
                                      tex_binding_hash, &key);
         TextureLruNode *key_out = container_of(found, TextureLruNode, node);
         possibly_dirty |= (key_out->binding == NULL) || key_out->possibly_dirty;
+        if (key_out->binding != NULL) {
+            possibly_dirty |= texture_binding_pages_dirty(
+                r, key_out->binding, key.texture_vram_offset,
+                key.texture_length, key.palette_vram_offset,
+                key.palette_length);
+        }
 
         if (!surf_to_tex && !possibly_dirty_checked) {
             possibly_dirty |= check_texture_possibly_dirty(
@@ -410,6 +472,7 @@ void pgraph_gl_bind_textures(NV2AState *d)
 
         key_out->possibly_dirty = false;
         TextureBinding *binding = key_out->binding;
+        binding->dirty_generation = texture_dirty_generation_for_key(r, &key);
         if (!surf_to_tex && texture_surface &&
             !texture_surface->upload_pending) {
             binding->draw_time = texture_surface->draw_time;
@@ -793,6 +856,7 @@ static TextureBinding* generate_texture(const TextureShape s,
     ret->refcnt = 1;
     ret->draw_time = 0;
     ret->data_hash = 0;
+    ret->dirty_generation = 0;
     ret->min_filter = 0xFFFFFFFF;
     ret->mag_filter = 0xFFFFFFFF;
     ret->lod_bias = 0xFFFFFFFF;
@@ -861,6 +925,11 @@ void pgraph_gl_init_textures(NV2AState *d)
     r->texture_cache.init_node = texture_cache_entry_init;
     r->texture_cache.compare_nodes = texture_cache_entry_compare;
     r->texture_cache.post_node_evict = texture_cache_entry_post_evict;
+
+    r->texture_dirty_generation = 0;
+    r->texture_dirty_page_count =
+        TARGET_PAGE_ALIGN(memory_region_size(d->vram)) >> TARGET_PAGE_BITS;
+    r->texture_dirty_pages = g_new0(uint64_t, r->texture_dirty_page_count);
 }
 
 void pgraph_gl_finalize_textures(PGRAPHState *pg)
@@ -873,6 +942,10 @@ void pgraph_gl_finalize_textures(PGRAPHState *pg)
 
     lru_flush(&r->texture_cache);
     free(r->texture_cache_entries);
+    g_free(r->texture_dirty_pages);
 
     r->texture_cache_entries = NULL;
+    r->texture_dirty_pages = NULL;
+    r->texture_dirty_page_count = 0;
+    r->texture_dirty_generation = 0;
 }

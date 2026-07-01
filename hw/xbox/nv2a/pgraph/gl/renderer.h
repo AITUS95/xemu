@@ -70,6 +70,7 @@ typedef struct TextureBinding {
     unsigned int refcnt;
     int draw_time;
     uint64_t data_hash;
+    uint64_t dirty_generation;
     unsigned int scale;
     unsigned int min_filter;
     unsigned int mag_filter;
@@ -199,6 +200,9 @@ typedef struct PGRAPHGLState {
     TextureBinding *texture_binding[NV2A_MAX_TEXTURES];
     Lru texture_cache;
     TextureLruNode *texture_cache_entries;
+    uint64_t texture_dirty_generation;
+    uint64_t *texture_dirty_pages;
+    size_t texture_dirty_page_count;
 
     Lru shader_cache;
     ShaderBinding *shader_cache_entries;
