@@ -86,6 +86,42 @@ static void update_memory_buffer(NV2AState *d, hwaddr addr, hwaddr size,
     memory_buffer_update_cache_add(cache, addr, end);
 }
 
+void pgraph_gl_set_vertex_attrib_pointer(PGRAPHGLState *r, unsigned int index,
+                                         GLuint buffer, bool integer,
+                                         GLint size, GLenum type,
+                                         GLboolean normalized,
+                                         GLsizei stride, uintptr_t pointer)
+{
+    VertexAttribPointerState *state = &r->gl_vertex_attrib_pointer[index];
+
+    if (state->valid &&
+        state->integer == integer &&
+        state->buffer == buffer &&
+        state->size == size &&
+        state->type == type &&
+        state->normalized == normalized &&
+        state->stride == stride &&
+        state->pointer == pointer) {
+        return;
+    }
+
+    if (integer) {
+        glVertexAttribIPointer(index, size, type, stride, (void *)pointer);
+    } else {
+        glVertexAttribPointer(index, size, type, normalized, stride,
+                              (void *)pointer);
+    }
+
+    state->valid = true;
+    state->integer = integer;
+    state->buffer = buffer;
+    state->size = size;
+    state->type = type;
+    state->normalized = normalized;
+    state->stride = stride;
+    state->pointer = pointer;
+}
+
 void pgraph_gl_update_entire_memory_buffer(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
@@ -123,7 +159,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
 
         if (!attr->count) {
             pgraph_gl_set_vertex_attrib_array(r, i, false);
-            glVertexAttrib4fv(i, attr->inline_value);
+            pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
             continue;
         }
 
@@ -132,7 +168,7 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
 
         GLint gl_count = attr->count;
         GLenum gl_type;
-        GLboolean gl_normalize;
+        GLboolean gl_normalize = GL_FALSE;
         bool needs_conversion = false;
 
         switch (attr->format) {
@@ -210,17 +246,15 @@ void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element,
             // used.
             pgraph_update_inline_value(attr, last_entry);
             pgraph_gl_set_vertex_attrib_array(r, i, false);
-            glVertexAttrib4fv(i, attr->inline_value);
+            pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
             continue;
         }
 
-        if (needs_conversion) {
-            glVertexAttribIPointer(i, gl_count, gl_type, stride,
-                                   (void *)attrib_data_addr);
-        } else {
-            glVertexAttribPointer(i, gl_count, gl_type, gl_normalize, stride,
-                                  (void *)attrib_data_addr);
-        }
+        pgraph_gl_set_vertex_attrib_pointer(
+            r, i, inline_data ? r->gl_inline_array_buffer : r->gl_memory_buffer,
+            needs_conversion, gl_count, gl_type,
+            needs_conversion ? GL_FALSE : gl_normalize, stride,
+            attrib_data_addr);
 
         pgraph_gl_set_vertex_attrib_array(r, i, true);
         last_entry += stride * provoking_element_index;
@@ -315,6 +349,10 @@ void pgraph_gl_init_buffers(NV2AState *d)
     glGenVertexArrays(1, &r->gl_vertex_array);
     glBindVertexArray(r->gl_vertex_array);
     r->gl_enabled_vertex_attributes = 0;
+    memset(r->gl_vertex_attrib_pointer, 0,
+           sizeof(r->gl_vertex_attrib_pointer));
+    memset(r->gl_vertex_attrib_value_valid, 0,
+           sizeof(r->gl_vertex_attrib_value_valid));
 
     assert(glGetError() == GL_NO_ERROR);
 }
@@ -345,4 +383,8 @@ void pgraph_gl_finalize_buffers(PGRAPHState *pg)
     glDeleteVertexArrays(1, &r->gl_vertex_array);
     r->gl_vertex_array = 0;
     r->gl_enabled_vertex_attributes = 0;
+    memset(r->gl_vertex_attrib_pointer, 0,
+           sizeof(r->gl_vertex_attrib_pointer));
+    memset(r->gl_vertex_attrib_value_valid, 0,
+           sizeof(r->gl_vertex_attrib_value_valid));
 }

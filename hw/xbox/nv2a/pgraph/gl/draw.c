@@ -464,7 +464,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
                 glBufferData(GL_ARRAY_BUFFER,
                              pg->inline_buffer_length * sizeof(float) * 4,
                              attr->inline_buffer, GL_STREAM_DRAW);
-                glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 0, 0);
+                pgraph_gl_set_vertex_attrib_pointer(
+                    r, i, r->gl_inline_buffer[i], false, 4, GL_FLOAT,
+                    GL_FALSE, 0, 0);
                 pgraph_gl_set_vertex_attrib_array(r, i, true);
                 attr->inline_buffer_populated = false;
                 memcpy(attr->inline_value,
@@ -472,7 +474,7 @@ void pgraph_gl_flush_draw(NV2AState *d)
                        sizeof(attr->inline_value));
             } else {
                 pgraph_gl_set_vertex_attrib_array(r, i, false);
-                glVertexAttrib4fv(i, attr->inline_value);
+                pgraph_gl_set_vertex_attrib_value(r, i, attr->inline_value);
             }
         }
 

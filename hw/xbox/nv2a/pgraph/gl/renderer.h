@@ -88,6 +88,17 @@ typedef struct TextureBinding {
     GLint render_internal_format;
 } TextureBinding;
 
+typedef struct VertexAttribPointerState {
+    bool valid;
+    bool integer;
+    GLuint buffer;
+    GLint size;
+    GLenum type;
+    GLboolean normalized;
+    GLsizei stride;
+    uintptr_t pointer;
+} VertexAttribPointerState;
+
 typedef struct ShaderModuleCacheKey {
     GLenum kind;
     union {
@@ -189,6 +200,10 @@ typedef struct PGRAPHGLState {
     GLuint gl_vertex_array;
     GLuint gl_inline_buffer[NV2A_VERTEXSHADER_ATTRIBUTES];
     uint16_t gl_enabled_vertex_attributes;
+    VertexAttribPointerState
+        gl_vertex_attrib_pointer[NV2A_VERTEXSHADER_ATTRIBUTES];
+    bool gl_vertex_attrib_value_valid[NV2A_VERTEXSHADER_ATTRIBUTES];
+    float gl_vertex_attrib_value[NV2A_VERTEXSHADER_ATTRIBUTES][4];
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     SurfaceBinding *color_binding, *zeta_binding;
@@ -271,12 +286,29 @@ static inline void pgraph_gl_set_vertex_attrib_array(PGRAPHGLState *r,
     }
 }
 
+static inline void pgraph_gl_set_vertex_attrib_value(PGRAPHGLState *r,
+                                                     unsigned int index,
+                                                     const float value[4])
+{
+    if (!r->gl_vertex_attrib_value_valid[index] ||
+        memcmp(r->gl_vertex_attrib_value[index], value, 4 * sizeof(float))) {
+        glVertexAttrib4fv(index, value);
+        memcpy(r->gl_vertex_attrib_value[index], value, 4 * sizeof(float));
+        r->gl_vertex_attrib_value_valid[index] = true;
+    }
+}
+
 extern GloContext *g_nv2a_context_render;
 extern GloContext *g_nv2a_context_display;
 
 unsigned int pgraph_gl_bind_inline_array(NV2AState *d);
 void pgraph_gl_bind_shaders(PGRAPHState *pg);
 void pgraph_gl_bind_textures(NV2AState *d);
+void pgraph_gl_set_vertex_attrib_pointer(PGRAPHGLState *r, unsigned int index,
+                                         GLuint buffer, bool integer,
+                                         GLint size, GLenum type,
+                                         GLboolean normalized,
+                                         GLsizei stride, uintptr_t pointer);
 void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element, unsigned int max_element, bool inline_data, unsigned int inline_stride, unsigned int provoking_element);
 bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape, hwaddr texture_vram_offset, bool texture_uses_mipmaps, unsigned int *source_x, unsigned int *source_y);
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src);
