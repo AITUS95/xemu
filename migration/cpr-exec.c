@@ -146,11 +146,7 @@ static void cpr_exec_cb(void *opaque)
     cpr_exec_preserve_fds();
 
     trace_cpr_exec();
-#ifdef _WIN32
-    execvp(argv[0], (const char * const *)argv);
-#else
     execvp(argv[0], argv);
-#endif
 
     /*
      * exec should only fail if argv[0] is bogus, or has a permissions problem,
