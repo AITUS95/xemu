@@ -36,9 +36,7 @@ jobs:
     steps:
     - name: Setup build options
       run: |
-        opts=(
-          --enable-vulkan
-        )
+        opts=()
         if [[ "${{ matrix.configuration }}" == "debug" ]]; then
           opts+=(
             --debug
@@ -54,6 +52,9 @@ jobs:
           )
           mkdir -p ${LTO_CACHE_DIR}
         fi
+        opts+=(
+          --enable-vulkan
+        )
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Initialize compiler cache
       id: cache

@@ -109,9 +109,7 @@ jobs:
         ccache -z
     - name: Setup build options
       run: |
-        opts=(
-          --enable-vulkan
-        )
+        opts=()
         if [[ "${{ matrix.configuration }}" == "debug" ]]; then
           opts+=(
             --debug
@@ -130,6 +128,9 @@ jobs:
           #        failure and have llvm toolchain generate PDB directly.
           :
         fi
+        opts+=(
+          --enable-vulkan
+        )
         echo "XEMU_BUILD_OPTIONS=${opts[*]}" >> "$GITHUB_ENV"
     - name: Compile
       run: |
