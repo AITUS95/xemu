@@ -125,7 +125,7 @@ jobs:
           "${{ matrix.arch }}" \
           "${{ matrix.configuration }}" \
           "${XEMU_BUILD_OPTIONS}" \
-          "$(shasum -a 256 build.sh configure | shasum -a 256 | awk '{print $1}')")"
+          "$(shasum -a 256 build.sh configure meson.build meson_options.txt scripts/meson-buildoptions.sh | shasum -a 256 | awk '{print $1}')")"
 
         if [[ -f build/Makefile && -f "${stamp_file}" ]] && cmp -s "${stamp_file}" <(printf '%s' "${stamp_value}"); then
           ./build.sh --skip-configure -a ${{ matrix.arch }} ${XEMU_BUILD_OPTIONS}

@@ -36,12 +36,15 @@ jobs:
     steps:
     - name: Setup build options
       run: |
+        opts=(
+          --enable-vulkan
+        )
         if [[ "${{ matrix.configuration }}" == "debug" ]]; then
-          opts=(
+          opts+=(
             --debug
           )
         else
-          opts=(
+          opts+=(
             --extra-ldflags="-Wl,--thinlto-cache-policy=cache_size_bytes=$LTO_CACHE_MAXSIZE"
             -Db_lto=true
             -Db_lto_mode=thin
@@ -187,9 +190,13 @@ jobs:
           "${{ matrix.arch }}" \
           "${{ matrix.configuration }}" \
           "${XEMU_BUILD_OPTIONS}" \
-          "$(sha256sum build.sh configure debian/rules | sha256sum | cut -d' ' -f1)")"
+          "$(sha256sum build.sh configure meson.build meson_options.txt scripts/meson-buildoptions.sh debian/rules | sha256sum | cut -d' ' -f1)")"
         dpkg-buildpackage --no-sign -b -nc
         popd
+        grep -q '^CONFIG_VULKAN=y$' .incremental-src/build/config-host.mak || {
+          echo "CONFIG_VULKAN is not enabled in the Linux build"
+          exit 1
+        }
 
         mkdir -p deb
         mv *.deb *.ddeb deb
