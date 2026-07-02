@@ -1,0 +1,23 @@
+name: CI (MSVC)
+
+on:
+  pull_request:
+    branches:
+      - MSVC
+  push:
+    branches:
+      - MSVC
+    tags-ignore:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ github.ref }}
