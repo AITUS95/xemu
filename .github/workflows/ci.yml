@@ -18,4 +18,3 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ github.ref }}
-      windows_profile_build: false

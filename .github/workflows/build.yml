@@ -7,11 +7,6 @@ on:
         description: Git ref (commit, branch, or tag) to build
         required: true
         type: string
-      windows_profile_build:
-        description: Build the Windows profiling package
-        required: false
-        type: boolean
-        default: true
     outputs:
       pkg_version:
         description: Build version
@@ -81,4 +76,3 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       pkg_version: ${{ needs.source.outputs.pkg_version }}
-      profile_build: ${{ inputs.windows_profile_build }}

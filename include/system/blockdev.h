@@ -10,7 +10,7 @@
 #ifndef BLOCKDEV_H
 #define BLOCKDEV_H
 
-#include <block/block.h>
+#include "block/block.h"
 #include "qemu/queue.h"
 
 typedef enum {
