@@ -194,7 +194,7 @@ jobs:
           "$(sha256sum build.sh configure meson.build meson_options.txt scripts/meson-buildoptions.sh debian/rules | sha256sum | cut -d' ' -f1)")"
         dpkg-buildpackage --no-sign -b -nc
         popd
-        grep -q '^CONFIG_VULKAN=y$' .incremental-src/build/config-host.mak || {
+        grep -q '^#define CONFIG_VULKAN 1$' .incremental-src/build/config-host.h || {
           echo "CONFIG_VULKAN is not enabled in the Linux build"
           exit 1
         }

@@ -152,7 +152,7 @@ jobs:
           ./build.sh -p win64-cross ${XEMU_BUILD_OPTIONS}
           printf '%s' "${stamp_value}" > "${stamp_file}"
         fi
-        grep -q '^CONFIG_VULKAN=y$' build/config-host.mak || {
+        grep -q '^#define CONFIG_VULKAN 1$' build/config-host.h || {
           echo "CONFIG_VULKAN is not enabled in the Windows build"
           exit 1
         }
