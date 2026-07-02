@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+    branches-ignore:
+      - MSVC
   push:
     branches-ignore:
       - master
@@ -19,3 +21,4 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ github.ref }}
+      windows_profile_build: false

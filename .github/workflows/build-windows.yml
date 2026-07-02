@@ -7,6 +7,11 @@ on:
         description: Build version
         required: true
         type: string
+      profile_build:
+        description: Build the profiler-friendly Windows package
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -208,6 +213,7 @@ jobs:
   # normal Windows build can keep LTO and smaller artifacts.
   build_profile:
     name: Build profiling package for Windows (x86_64)
+    if: ${{ inputs.profile_build }}
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/xemu-project/xemu-win64-toolchain-gcc:sha-18018f1
@@ -332,6 +338,7 @@ jobs:
 
   generate_profile_pdb:
     name: Generate profiling package for Windows (x86_64)
+    if: ${{ inputs.profile_build }}
     runs-on: windows-latest
     needs: build_profile
     steps:
