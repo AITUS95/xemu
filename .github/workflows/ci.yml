@@ -2,12 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches-ignore:
-      - MSVC
   push:
     branches-ignore:
       - master
-      - MSVC
     tags-ignore:
       - "v*"
 
