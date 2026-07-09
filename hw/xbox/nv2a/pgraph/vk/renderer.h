@@ -129,6 +129,8 @@ typedef struct SurfaceBinding {
     bool draw_dirty;
     bool download_pending;
     bool upload_pending;
+    uint32_t download_row_start;
+    uint32_t download_row_end;
 
     BasicSurfaceFormatInfo fmt;
     SurfaceFormatInfo host_fmt;
@@ -203,10 +205,6 @@ typedef struct TextureKey {
     hwaddr palette_vram_offset;
     hwaddr palette_length;
     float scale;
-    uint32_t filter;
-    uint32_t address;
-    uint32_t border_color;
-    uint32_t max_anisotropy;
 } TextureKey;
 
 typedef struct TextureBinding {
@@ -216,12 +214,35 @@ typedef struct TextureBinding {
     VkImageLayout current_layout;
     VkImageView image_view;
     VmaAllocation allocation;
-    VkSampler sampler;
     bool possibly_dirty;
     uint64_t hash;
     unsigned int draw_time;
     uint32_t submit_time;
 } TextureBinding;
+
+typedef struct TextureSamplerKey {
+    /* Keep sampler state out of TextureKey so sampler changes do not
+     * invalidate cached texture images or force content re-hashing. */
+    TextureShape state;
+    uint32_t filter;
+    uint32_t address;
+    uint32_t border_color;
+    uint32_t max_anisotropy;
+} TextureSamplerKey;
+
+typedef struct TextureSamplerBinding {
+    LruNode node;
+    TextureSamplerKey key;
+    VkSampler sampler;
+    uint32_t submit_time;
+} TextureSamplerBinding;
+
+typedef struct DescriptorSetState {
+    VkDeviceSize uniform_ranges[2];
+    VkImageView image_views[NV2A_MAX_TEXTURES];
+    VkSampler samplers[NV2A_MAX_TEXTURES];
+    bool valid;
+} DescriptorSetState;
 
 typedef struct QueryReport {
     QSIMPLEQ_ENTRY(QueryReport) entry;
@@ -340,7 +361,6 @@ typedef struct PGRAPHVkState {
     VkCommandBuffer command_buffers[2];
 
     VkCommandBuffer command_buffer;
-    VkSemaphore command_buffer_semaphore;
     VkFence command_buffer_fence;
     unsigned int command_buffer_start_time;
     bool in_command_buffer;
@@ -367,6 +387,7 @@ typedef struct PGRAPHVkState {
     VkDescriptorPool descriptor_pool;
     VkDescriptorSetLayout descriptor_set_layout;
     VkDescriptorSet descriptor_sets[1024];
+    DescriptorSetState descriptor_set_states[1024];
     int descriptor_set_index;
 
     StorageBuffer storage_buffers[BUFFER_COUNT];
@@ -374,6 +395,9 @@ typedef struct PGRAPHVkState {
     MemorySyncRequirement vertex_ram_buffer_syncs[NV2A_VERTEXSHADER_ATTRIBUTES];
     size_t num_vertex_ram_buffer_syncs;
     unsigned long *uploaded_bitmap;
+    /* Tracks BUFFER_VERTEX_RAM pages referenced by draws recorded in the
+     * current command buffer. */
+    unsigned long *vertex_ram_in_use_bitmap;
     size_t bitmap_size;
 
     VkVertexInputAttributeDescription vertex_attribute_descriptions[NV2A_VERTEXSHADER_ATTRIBUTES];
@@ -396,6 +420,10 @@ typedef struct PGRAPHVkState {
     TextureBinding *texture_cache_entries;
     TextureBinding *texture_bindings[NV2A_MAX_TEXTURES];
     TextureBinding dummy_texture;
+    Lru texture_sampler_cache;
+    TextureSamplerBinding *texture_sampler_cache_entries;
+    TextureSamplerBinding *texture_samplers[NV2A_MAX_TEXTURES];
+    TextureSamplerBinding dummy_sampler;
     bool texture_bindings_changed;
     VkFormatProperties *texture_format_properties;
 
@@ -410,8 +438,8 @@ typedef struct PGRAPHVkState {
     ShaderModuleCacheEntry *shader_module_cache_entries;
 
     // FIXME: Merge these into a structure
-    uint64_t uniform_buffer_hashes[2];
     size_t uniform_buffer_offsets[2];
+    bool uniform_buffer_offsets_valid;
     bool uniforms_changed;
 
     VkQueryPool query_pool;
@@ -474,6 +502,12 @@ void pgraph_vk_finalize_buffers(NV2AState *d);
 bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
                                     VkDeviceSize size,
                                     VkDeviceAddress alignment);
+bool pgraph_vk_buffer_has_space_for_ranges(PGRAPHState *pg, int index,
+                                           const VkDeviceSize *sizes,
+                                           size_t count,
+                                           VkDeviceAddress alignment);
+void pgraph_vk_flush_buffer_range(PGRAPHState *pg, int index,
+                                  VkDeviceSize offset, VkDeviceSize size);
 VkDeviceSize pgraph_vk_append_to_buffer(PGRAPHState *pg, int index, void **data,
                                         VkDeviceSize *sizes, size_t count,
                                         VkDeviceAddress alignment);
@@ -514,6 +548,8 @@ void pgraph_vk_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_vk_surface_get_within(NV2AState *d, hwaddr addr);
 void pgraph_vk_wait_for_surface_download(SurfaceBinding *e);
 void pgraph_vk_download_dirty_surfaces(NV2AState *d);
+bool pgraph_vk_surface_range_has_dirty_overlap(PGRAPHState *pg, hwaddr start,
+                                               hwaddr size);
 void pgraph_vk_download_surfaces_in_range_if_dirty(PGRAPHState *pg, hwaddr start, hwaddr size);
 void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
                                    bool force);

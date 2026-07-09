@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Makefile wrapper: Meson/Ninja and scripts/ci/windows-msvc-probe.ps1 remain the real build system. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Profile|x64">
+      <Configuration>Profile</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>MakeFileProj</Keyword>
+    <ProjectGuid>{d9d23a92-24aa-46f0-a40e-72dfef8c1d6d}</ProjectGuid>
+    <RootNamespace>xemu</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <XemuArchitecture>amd64</XemuArchitecture>
+    <XemuQemuCpu>x86_64</XemuQemuCpu>
+    <XemuBuildScope>full</XemuBuildScope>
+    <MsvcBuildScript>$(ProjectDir)build-msvc.ps1</MsvcBuildScript>
+    <MsvcBuildCommonArgs>-Architecture $(XemuArchitecture) -QemuCpu $(XemuQemuCpu) -BuildScope $(XemuBuildScope)</MsvcBuildCommonArgs>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <XemuBuildConfig>debug</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-debug</XemuBuildDir>
+    <NMakeOutput>$(ProjectDir)msvc-artifacts\debug\xemu.exe</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
+    <XemuBuildConfig>profile</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-profile</XemuBuildDir>
+    <NMakeOutput>$(ProjectDir)msvc-artifacts\profile\xemu.exe</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <XemuBuildConfig>release</XemuBuildConfig>
+    <XemuBuildDir>build-msvc-release</XemuBuildDir>
+    <NMakeOutput>$(ProjectDir)msvc-artifacts\release\xemu.exe</NMakeOutput>
+  </PropertyGroup>
+  <PropertyGroup>
+    <MsvcBuildCommand>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" $(MsvcBuildCommonArgs) -Config "$(Configuration)"</MsvcBuildCommand>
+    <NMakeBuildCommandLine>$(MsvcBuildCommand)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" $(MsvcBuildCommonArgs) -Config "$(Configuration)" -Rebuild</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MsvcBuildScript)" -Config "$(Configuration)" -Clean</NMakeCleanCommandLine>
+    <NMakePreprocessorDefinitions>WIN32;_WIN32;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_GNU_SOURCE;XBOX=1;CONFIG_WIN32=1;CONFIG_TCG=1;NOMINMAX;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir);$(ProjectDir)include;$(ProjectDir)host\include;$(ProjectDir)host\include\x86_64;$(ProjectDir)build-msvc;$(ProjectDir)build-msvc\include;$(ProjectDir)build-msvc\qapi;$(ProjectDir)build-msvc-debug;$(ProjectDir)build-msvc-debug\include;$(ProjectDir)build-msvc-profile;$(ProjectDir)build-msvc-profile\include;$(ProjectDir)build-msvc-release;$(ProjectDir)build-msvc-release\include;$(ProjectDir)subprojects\libvhost-user;$(ProjectDir)subprojects\libvhost-user\include;$(ProjectDir)subprojects\libvduse;$(ProjectDir)subprojects\libvduse\include;$(ProjectDir)thirdparty;$(ProjectDir)thirdparty\nvapi;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="xemu-msvc.vcxproj" />
+    <None Include="tasks.vs.json" />
+    <None Include="launch.vs.json" />
+    <None Include="CppProperties.json" />
+    <None Include="build-msvc.ps1" />
+    <None Include="scripts\ci\windows-msvc-probe.ps1" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

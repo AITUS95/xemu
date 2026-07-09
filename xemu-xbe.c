@@ -135,3 +135,18 @@ struct xbe *xemu_get_xbe_info(void)
 
     return &xbe;
 }
+
+char *xemu_get_current_title_cache_key(void)
+{
+    struct xbe *xbe = xemu_get_xbe_info();
+
+    if (!xbe || !xbe->cert) {
+        return g_strdup("global");
+    }
+
+    /*
+     * Use the title ID as the cache namespace. It is stable across localized
+     * names and avoids introducing filesystem-unfriendly title strings.
+     */
+    return g_strdup_printf("%08x", le32_to_cpu(xbe->cert->m_titleid));
+}

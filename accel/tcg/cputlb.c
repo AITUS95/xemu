@@ -282,6 +282,7 @@ static void tlb_mmu_flush_locked(CPUTLBDesc *desc, CPUTLBDescFast *fast)
     desc->large_page_addr = -1;
     desc->large_page_mask = -1;
     desc->vindex = 0;
+    desc->vtable_notdirty_mask = 0;
     memset(fast->table, -1, sizeof_tlb(fast));
     memset(desc->vtable, -1, sizeof(desc->vtable));
 }
@@ -477,6 +478,26 @@ static inline bool tlb_flush_entry_locked(CPUTLBEntry *tlb_entry, vaddr page)
     return tlb_flush_entry_mask_locked(tlb_entry, page, -1);
 }
 
+static inline bool tlb_entry_write_notdirty(const CPUTLBEntry *entry)
+{
+    uintptr_t addr_write = entry->addr_write;
+
+    return addr_write != (uintptr_t)-1 && (addr_write & TLB_NOTDIRTY);
+}
+
+/* Called with tlb_c.lock held */
+static inline void tlb_vtable_update_notdirty_locked(CPUTLBDesc *desc,
+                                                     size_t vidx)
+{
+    unsigned int mask = 1u << vidx;
+
+    if (tlb_entry_write_notdirty(&desc->vtable[vidx])) {
+        desc->vtable_notdirty_mask |= mask;
+    } else {
+        desc->vtable_notdirty_mask &= ~mask;
+    }
+}
+
 /* Called with tlb_c.lock held */
 static void tlb_flush_vtlb_page_mask_locked(CPUState *cpu, int mmu_idx,
                                             vaddr page,
@@ -488,6 +509,7 @@ static void tlb_flush_vtlb_page_mask_locked(CPUState *cpu, int mmu_idx,
     assert_cpu_is_self(cpu);
     for (k = 0; k < CPU_VTLB_SIZE; k++) {
         if (tlb_flush_entry_mask_locked(&d->vtable[k], page, mask)) {
+            d->vtable_notdirty_mask &= ~(1u << k);
             tlb_n_used_entries_dec(cpu, mmu_idx);
         }
     }
@@ -933,6 +955,7 @@ void tlb_reset_dirty(CPUState *cpu, uintptr_t start, uintptr_t length)
         for (i = 0; i < CPU_VTLB_SIZE; i++) {
             tlb_reset_dirty_range_locked(&desc->vfulltlb[i], &desc->vtable[i],
                                          start, length);
+            tlb_vtable_update_notdirty_locked(desc, i);
         }
     }
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
@@ -962,9 +985,15 @@ static void tlb_set_dirty(CPUState *cpu, vaddr addr)
     }
 
     for (mmu_idx = 0; mmu_idx < NB_MMU_MODES; mmu_idx++) {
+        CPUTLBDesc *desc = &cpu->neg.tlb.d[mmu_idx];
+        unsigned int work = desc->vtable_notdirty_mask;
         int k;
-        for (k = 0; k < CPU_VTLB_SIZE; k++) {
-            tlb_set_dirty1_locked(&cpu->neg.tlb.d[mmu_idx].vtable[k], addr);
+
+        while (work) {
+            k = ctz32(work);
+            work &= work - 1;
+            tlb_set_dirty1_locked(&desc->vtable[k], addr);
+            tlb_vtable_update_notdirty_locked(desc, k);
         }
     }
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
@@ -1138,6 +1167,7 @@ void tlb_set_page_full(CPUState *cpu, int mmu_idx,
         /* Evict the old entry into the victim tlb.  */
         copy_tlb_helper_locked(tv, te);
         desc->vfulltlb[vidx] = desc->fulltlb[index];
+        tlb_vtable_update_notdirty_locked(desc, vidx);
         tlb_n_used_entries_dec(cpu, mmu_idx);
     }
 
@@ -1320,11 +1350,13 @@ static bool victim_tlb_hit(CPUState *cpu, size_t mmu_idx, size_t index,
         if (cmp == page) {
             /* Found entry in victim tlb, swap tlb and iotlb.  */
             CPUTLBEntry tmptlb, *tlb = &cpu_tlb_fast(cpu, mmu_idx)->table[index];
+            CPUTLBDesc *desc = &cpu->neg.tlb.d[mmu_idx];
 
             qemu_spin_lock(&cpu->neg.tlb.c.lock);
             copy_tlb_helper_locked(&tmptlb, tlb);
             copy_tlb_helper_locked(tlb, vtlb);
             copy_tlb_helper_locked(vtlb, &tmptlb);
+            tlb_vtable_update_notdirty_locked(desc, vidx);
             qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
             CPUTLBEntryFull *f1 = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
@@ -1341,21 +1373,30 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
                            CPUTLBEntryFull *full, uintptr_t retaddr)
 {
     ram_addr_t ram_addr = mem_vaddr + full->xlat_section;
+    bool code_dirty = physical_memory_get_dirty_flag(ram_addr,
+                                                     DIRTY_MEMORY_CODE);
+    uint8_t clean_mask;
 
     trace_memory_notdirty_write_access(mem_vaddr, ram_addr, size);
 
-    if (!physical_memory_get_dirty_flag(ram_addr, DIRTY_MEMORY_CODE)) {
+    if (!code_dirty) {
         tb_invalidate_phys_range_fast(cpu, ram_addr, size, retaddr);
+        code_dirty = physical_memory_get_dirty_flag(ram_addr,
+                                                    DIRTY_MEMORY_CODE);
     }
 
     /*
      * Set both VGA and migration bits for simplicity and to remove
      * the notdirty callback faster.
      */
-    physical_memory_set_dirty_range(ram_addr, size, DIRTY_CLIENTS_NOCODE);
+    clean_mask = physical_memory_range_includes_clean(ram_addr, size,
+                                                      DIRTY_CLIENTS_NOCODE);
+    if (clean_mask) {
+        physical_memory_set_dirty_range(ram_addr, size, clean_mask);
+    }
 
     /* We remove the notdirty callback only if the code has been flushed. */
-    if (!physical_memory_is_clean(ram_addr)) {
+    if (code_dirty) {
         trace_memory_notdirty_set_dirty(mem_vaddr);
         tlb_set_dirty(cpu, mem_vaddr);
     }
@@ -1401,6 +1442,18 @@ static int probe_access_internal(CPUState *cpu, vaddr addr,
     flags &= tlb_addr;
 
     *pfull = full = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
+
+    if (likely(!(tlb_addr & TLB_FORCE_SLOW))) {
+        if (unlikely(access_type != MMU_INST_FETCH && force_mmio)) {
+            *phost = NULL;
+            return TLB_MMIO;
+        }
+
+        /* The common RAM path does not need to touch slow_flags at all. */
+        *phost = (void *)((uintptr_t)addr + entry->addend);
+        return flags;
+    }
+
     flags |= full->slow_flags[access_type];
 
     /* Fold all "mmio-like" bits into TLB_MMIO.  This is not RAM.  */

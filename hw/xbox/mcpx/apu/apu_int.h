@@ -23,6 +23,9 @@
 
 #include "qemu/osdep.h"
 #include <math.h>
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
 #include <SDL3/SDL.h>
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
@@ -96,9 +99,9 @@ typedef struct MCPXAPUState {
     uint32_t regs[0x20000];
 
     int ep_frame_div;
-    int sleep_acc_us;
+    int frame_work_acc_us;
     int frame_count;
-    int64_t frame_count_time_ms;
+    int64_t frame_count_time_us;
     int64_t next_frame_time_us;
 
     struct {

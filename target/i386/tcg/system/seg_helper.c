@@ -45,6 +45,7 @@ void helper_syscall(CPUX86State *env, int next_eip_addend)
         code64 = env->hflags & HF_CS64_MASK;
 
         env->eflags &= ~(env->fmask | RF_MASK);
+        x86_sync_hflags_from_eflags(env, env->fmask | RF_MASK);
         cpu_load_eflags(env, env->eflags, 0);
         cpu_x86_load_seg_cache(env, R_CS, selector & 0xfffc,
                            0, 0xffffffff,
@@ -68,6 +69,7 @@ void helper_syscall(CPUX86State *env, int next_eip_addend)
         env->regs[R_ECX] = (uint32_t)(env->eip + next_eip_addend);
 
         env->eflags &= ~(IF_MASK | RF_MASK | VM_MASK);
+        x86_sync_hflags_from_eflags(env, RF_MASK | VM_MASK);
         cpu_x86_load_seg_cache(env, R_CS, selector & 0xfffc,
                            0, 0xffffffff,
                                DESC_G_MASK | DESC_B_MASK | DESC_P_MASK |

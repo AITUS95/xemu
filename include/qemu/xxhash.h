@@ -48,8 +48,9 @@
  * xxhash32, customized for input variables that are not guaranteed to be
  * contiguous in memory.
  */
-static inline uint32_t qemu_xxhash8(uint64_t ab, uint64_t cd, uint64_t ef,
-                                    uint32_t g, uint32_t h)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash8(uint64_t ab, uint64_t cd, uint64_t ef,
+                      uint32_t g, uint32_t h)
 {
     uint32_t v1 = QEMU_XXHASH_SEED + PRIME32_1 + PRIME32_2;
     uint32_t v2 = QEMU_XXHASH_SEED + PRIME32_2;
@@ -103,29 +104,32 @@ static inline uint32_t qemu_xxhash8(uint64_t ab, uint64_t cd, uint64_t ef,
     return h32;
 }
 
-static inline uint32_t qemu_xxhash2(uint64_t ab)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash2(uint64_t ab)
 {
     return qemu_xxhash8(ab, 0, 0, 0, 0);
 }
 
-static inline uint32_t qemu_xxhash4(uint64_t ab, uint64_t cd)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash4(uint64_t ab, uint64_t cd)
 {
     return qemu_xxhash8(ab, cd, 0, 0, 0);
 }
 
-static inline uint32_t qemu_xxhash5(uint64_t ab, uint64_t cd, uint32_t e)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash5(uint64_t ab, uint64_t cd, uint32_t e)
 {
     return qemu_xxhash8(ab, cd, 0, e, 0);
 }
 
-static inline uint32_t qemu_xxhash6(uint64_t ab, uint64_t cd, uint32_t e,
-                                    uint32_t f)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash6(uint64_t ab, uint64_t cd, uint32_t e, uint32_t f)
 {
     return qemu_xxhash8(ab, cd, 0, e, f);
 }
 
-static inline uint32_t qemu_xxhash7(uint64_t ab, uint64_t cd, uint64_t ef,
-                                    uint32_t g)
+static inline __attribute__((always_inline))
+uint32_t qemu_xxhash7(uint64_t ab, uint64_t cd, uint64_t ef, uint32_t g)
 {
     return qemu_xxhash8(ab, cd, ef, g, 0);
 }

@@ -101,7 +101,8 @@ DEF_HELPER_FLAGS_3(write_crN, TCG_CALL_NO_RWG, void, env, int, tl)
 #endif /* !CONFIG_USER_ONLY */
 
 /* x86 FPU */
-#if defined(XBOX) && defined(__x86_64__)
+#if defined(XBOX) && (defined(__x86_64__) || defined(_M_X64)) && \
+    defined(CONFIG_XEMU_HARD_FPU)
 #define HS_DEF_HELPER_1(name, ret, t1) \
 	DEF_HELPER_1(name ## __soft, ret, t1) \
 	DEF_HELPER_1(name ## __hard, ret, t1)

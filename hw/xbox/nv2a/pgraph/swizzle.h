@@ -21,6 +21,7 @@
 #ifndef HW_XBOX_NV2A_PGRAPH_SWIZZLE_H
 #define HW_XBOX_NV2A_PGRAPH_SWIZZLE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 void swizzle_box(
@@ -42,6 +43,13 @@ void unswizzle_box(
     unsigned int row_pitch,
     unsigned int slice_pitch,
     unsigned int bytes_per_pixel);
+
+bool swizzle_offset_to_xy(unsigned int width,
+                          unsigned int height,
+                          unsigned int bytes_per_pixel,
+                          uint64_t byte_offset,
+                          unsigned int *x,
+                          unsigned int *y);
 
 static inline void unswizzle_rect(
     const uint8_t *src_buf,

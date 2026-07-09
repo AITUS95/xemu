@@ -95,6 +95,7 @@ debug_opts=''
 build_cflags=''
 default_job_count='12'
 sys_ldflags=''
+skip_configure=''
 
 get_job_count () {
 	if command -v 'nproc' >/dev/null
@@ -143,6 +144,10 @@ do
         ;;
     '--debug')
         debug="y"
+        shift
+        ;;
+    '--skip-configure')
+        skip_configure="y"
         shift
         ;;
     '-p'*)
@@ -227,9 +232,6 @@ case "$platform" in # Adjust compilation options based on platform
         export LDFLAGS="${LDFLAGS} \
                         -arch ${target_arch} \
                         -isysroot ${sdk}"
-        if [ "$target_arch" == "x86_64" ]; then
-            sys_cflags='-march=ivybridge'
-        fi
         sys_ldflags='-headerpad_max_install_names'
         export PKG_CONFIG_LIBDIR="${lib_prefix}/lib/pkgconfig"
         opts="$opts --disable-cocoa --cross-prefix="
@@ -262,13 +264,19 @@ configure="${project_source_dir}/configure"
 
 set -x # Print commands from now on
 
-"${configure}" \
-    --extra-cflags="-DXBOX=1 ${build_cflags} ${sys_cflags} ${CFLAGS}" \
-    --extra-ldflags="${sys_ldflags}" \
-    --target-list=i386-softmmu \
-    ${opts} \
-    "$@"
+if test -z "${skip_configure}"; then
+    "${configure}" \
+        --extra-cflags="-DXBOX=1 ${build_cflags} ${sys_cflags} ${CFLAGS}" \
+        --extra-ldflags="${sys_ldflags}" \
+        --target-list=i386-softmmu \
+        ${opts} \
+        "$@"
+fi
 
-time make -j"${job_count}" ${target} 2>&1 | tee build.log
+if test -f build/Makefile; then
+    time make -C build -j"${job_count}" ${target} 2>&1 | tee build.log
+else
+    time make -j"${job_count}" ${target} 2>&1 | tee build.log
+fi
 
 "${postbuild}" # call post build functions

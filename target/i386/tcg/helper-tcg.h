@@ -97,6 +97,16 @@ static inline unsigned int compute_pf(uint8_t x)
 /* misc_helper.c */
 void cpu_load_eflags(CPUX86State *env, int eflags, int update_mask);
 
+static inline __attribute__((always_inline))
+void x86_sync_hflags_from_eflags(CPUX86State *env, uint32_t mask)
+{
+    uint32_t hflags_mask =
+        mask & (HF_TF_MASK | HF_IOPL_MASK | HF_RF_MASK |
+                HF_VM_MASK | HF_AC_MASK);
+
+    env->hflags = (env->hflags & ~hflags_mask) | (env->eflags & hflags_mask);
+}
+
 /* system/svm_helper.c */
 #ifndef CONFIG_USER_ONLY
 G_NORETURN void cpu_vmexit(CPUX86State *nenv, uint64_t exit_code,
@@ -127,5 +137,6 @@ static inline void do_end_instruction(CPUX86State *env)
     /* needed if sti is just before */
     env->hflags &= ~HF_INHIBIT_IRQ_MASK;
     env->eflags &= ~HF_RF_MASK;
+    env->hflags &= ~HF_RF_MASK;
 }
 #endif /* I386_HELPER_TCG_H */

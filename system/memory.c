@@ -1107,6 +1107,7 @@ static void address_space_set_flatview(AddressSpace *as)
     }
 
     /* Writes are protected by the BQL.  */
+    qatomic_rcu_set(&as->dispatch, new_view->dispatch);
     qatomic_rcu_set(&as->current_map, new_view);
     if (old_view) {
         flatview_unref(old_view);
@@ -2370,6 +2371,19 @@ bool memory_region_test_and_clear_dirty(MemoryRegion *mr, hwaddr addr,
             memory_region_get_ram_addr(mr) + addr, size, client);
 }
 
+bool memory_region_get_dirty(MemoryRegion *mr, hwaddr addr,
+                             hwaddr size, unsigned client)
+{
+    if (mr->alias) {
+        return memory_region_get_dirty(mr->alias, addr - mr->alias_offset,
+                                       size, client);
+    }
+    assert(mr->terminates);
+    memory_region_sync_dirty_bitmap(mr, false);
+    return physical_memory_get_dirty(memory_region_get_ram_addr(mr) + addr,
+                                     size, client);
+}
+
 void memory_region_clear_dirty_bitmap(MemoryRegion *mr, hwaddr start,
                                       hwaddr len)
 {
@@ -3313,6 +3327,7 @@ void address_space_init(AddressSpace *as, MemoryRegion *root, const char *name)
     memory_region_ref(root);
     as->root = root;
     as->current_map = NULL;
+    as->dispatch = NULL;
     as->ioeventfd_nb = 0;
     as->ioeventfds = NULL;
     QTAILQ_INIT(&as->listeners);

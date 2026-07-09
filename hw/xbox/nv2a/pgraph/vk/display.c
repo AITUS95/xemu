@@ -30,8 +30,17 @@ static uint8_t *convert_texture_data__CR8YB8CB8YA8(uint8_t *data_out,
     for (y = 0; y < height; y++) {
         const uint8_t *line = &data_in[y * pitch];
         const uint32_t row_offset = y * width;
-        for (x = 0; x < width; x++) {
+        for (x = 0; x + 1 < width; x += 2) {
+            uint8_t *pixel0 = &data_out[(row_offset + x) * 4];
+            uint8_t *pixel1 = pixel0 + 4;
+
+            convert_yuy2_pair_to_rgb(&line[x * 2], pixel0, pixel1);
+            pixel0[3] = 255;
+            pixel1[3] = 255;
+        }
+        if (x < width) {
             uint8_t *pixel = &data_out[(row_offset + x) * 4];
+
             convert_yuy2_to_rgb(line, x, &pixel[0], &pixel[1], &pixel[2]);
             pixel[3] = 255;
         }
@@ -151,9 +160,8 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
         mapped_memory_ptr, d->vram_ptr + state.base + state.offset,
         state.in_width, state.in_height, state.pitch);
 
-    vmaFlushAllocation(r->allocator,
-                       r->storage_buffers[BUFFER_STAGING_SRC].allocation, 0,
-                       VK_WHOLE_SIZE);
+    size_t image_size = (size_t)state.in_width * state.in_height * 4;
+    pgraph_vk_flush_buffer_range(pg, BUFFER_STAGING_SRC, 0, image_size);
 
     vmaUnmapMemory(r->allocator,
                    r->storage_buffers[BUFFER_STAGING_SRC].allocation);
@@ -169,7 +177,7 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = r->storage_buffers[BUFFER_STAGING_SRC].buffer,
-        .size = VK_WHOLE_SIZE
+        .size = image_size,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1,
@@ -757,7 +765,7 @@ static void update_descriptor_set(PGRAPHState *pg, SurfaceBinding *surface)
         image_infos[1] = (VkDescriptorImageInfo){
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .imageView = r->dummy_texture.image_view,
-            .sampler = r->dummy_texture.sampler,
+            .sampler = r->dummy_sampler.sampler,
         };
     }
     descriptor_writes[1] = (VkWriteDescriptorSet){

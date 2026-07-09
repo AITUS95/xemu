@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -28,9 +29,23 @@ for source, dest in json.loads(out).items():
     try:
         os.symlink(source, bundle_dest)
     except BaseException as e:
-        if not isinstance(e, OSError) or e.errno != errno.EEXIST:
-            if os.name == 'nt':
-                print('Please enable Developer Mode to support soft link '
-                      'without Administrator permission')
-            print(f'error making symbolic link {dest}', file=sys.stderr)
-            raise e
+        if isinstance(e, OSError) and e.errno == errno.EEXIST:
+            continue
+        if os.name == 'nt' and isinstance(e, OSError) and (
+            getattr(e, 'winerror', None) == 1314 or
+            e.errno in (errno.EPERM, errno.EACCES)
+        ):
+            if not os.path.exists(source):
+                print(f'warning: cannot symlink future install target {dest}; '
+                      f'source does not exist yet: {source}', file=sys.stderr)
+                continue
+            if os.path.isdir(source):
+                shutil.copytree(source, bundle_dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, bundle_dest)
+            continue
+        if os.name == 'nt':
+            print('Please enable Developer Mode to support soft link '
+                  'without Administrator permission')
+        print(f'error making symbolic link {dest}', file=sys.stderr)
+        raise e

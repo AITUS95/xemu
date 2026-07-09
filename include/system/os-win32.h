@@ -31,6 +31,10 @@
 #include <ws2tcpip.h>
 #include "qemu/typedefs.h"
 
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
 #ifdef HAVE_AFUNIX_H
 #include <afunix.h>
 #else
@@ -72,22 +76,52 @@ void __attribute__((noreturn)) __mingw_longjmp(jmp_buf, int);
 #define longjmp(env, val) __mingw_longjmp(env, val)
 #elif defined(_WIN64)
 /*
- * On windows-x64, setjmp is implemented by _setjmp which needs a second parameter.
- * If this parameter is NULL, longjump does no stack unwinding.
+ * On MinGW windows-x64, setjmp is implemented by _setjmp which needs a second
+ * parameter. If this parameter is NULL, longjump does no stack unwinding.
  * That is what we need for QEMU. Passing the value of register rsp (default)
  * lets longjmp try a stack unwinding which will crash with generated code.
+ *
+ * With clang-cl and the MSVC runtime, longjmp still unwinds through SEH and
+ * crashes when the stack contains TCG generated code. Clang's builtins save
+ * and restore the register context without asking Windows to unwind JIT code.
  */
-# undef setjmp
-# define setjmp(env) _setjmp(env, NULL)
+# if defined(_MSC_VER) && defined(__clang__) && \
+     __has_builtin(__builtin_setjmp) && __has_builtin(__builtin_longjmp)
+typedef struct QEMUWinSigJmpBuf {
+    void *buf[5];
+} qemu_win_sigjmp_buf[1];
+extern __thread int qemu_win_sigjmp_value;
+extern __thread void *qemu_win_sigjmp_cpu;
+static inline int qemu_win_sigjmp_normalize_value(int value)
+{
+    return value ? value : 1;
+}
+#  define sigjmp_buf qemu_win_sigjmp_buf
+#  define sigsetjmp(env, savemask) \
+    ((void)(savemask), (__builtin_setjmp((env)[0].buf) ? qemu_win_sigjmp_value : 0))
+#  define siglongjmp(env, val) \
+    (qemu_win_sigjmp_value = qemu_win_sigjmp_normalize_value(val), \
+     __builtin_longjmp((env)[0].buf, 1))
+#  define QEMU_WIN32_SIGJMP_DEFINED 1
+# else
+#  undef setjmp
+#  if defined(_MSC_VER)
+#   define setjmp(env) _setjmp(env)
+#  else
+#   define setjmp(env) _setjmp(env, NULL)
+#  endif
+# endif
 #endif /* __aarch64__ */
 /* QEMU uses sigsetjmp()/siglongjmp() as the portable way to specify
  * "longjmp and don't touch the signal masks". Since we know that the
  * savemask parameter will always be zero we can safely define these
  * in terms of setjmp/longjmp on Win32.
  */
+#ifndef QEMU_WIN32_SIGJMP_DEFINED
 #define sigjmp_buf jmp_buf
 #define sigsetjmp(env, savemask) setjmp(env)
 #define siglongjmp(env, val) longjmp(env, val)
+#endif
 
 /* Missing POSIX functions. Don't use MinGW-w64 macros. */
 #ifndef _POSIX_THREAD_SAFE_FUNCTIONS

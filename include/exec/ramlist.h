@@ -49,6 +49,7 @@ typedef struct {
 typedef struct RAMList {
     QemuMutex mutex;
     RAMBlock *mru_block;
+    RAMBlock *host_mru_block;
     /* RCU-enabled, writes protected by the ramlist lock. */
     QLIST_HEAD(, RAMBlock) blocks;
     DirtyMemoryBlocks *dirty_memory[DIRTY_MEMORY_NUM];

@@ -110,6 +110,7 @@ void pgraph_glsl_set_vsh_state(PGRAPHState *pg, VshState *vsh)
     assert(vertex_program || fixed_function);
 
     vsh->surface_scale_factor = pg->surface_scale_factor; // FIXME
+    vsh->apply_scaled_pixel_center_bias = true;
 
     vsh->compressed_attrs = pg->compressed_attrs;
     vsh->uniform_attrs = pg->uniform_attrs;
@@ -224,13 +225,22 @@ MString *pgraph_glsl_gen_vsh(const VshState *state, GenVshGlslOptions opts)
         "vec4 NaNToValue(vec4 src, float replacement) {\n"
         "  return mix(src, vec4(replacement), isnan(src));\n"
         "}\n"
-        "\n"
-        // Xbox NV2A rasterizer appears to have 4 bit precision fixed-point
-        // fractional part and to convert floating-point coordinates by
-        // by truncating (not flooring).
+        "\n");
+
+    // Xbox NV2A rasterizer appears to have 4 bit precision fixed-point
+    // fractional part and to convert floating-point coordinates by
+    // truncating (not flooring).
+    mstring_append_fmt(header,
+        "vec2 scaledPixelCenterBias(vec2 pos) {\n"
+        "  const float surfaceScaleFactor = %u.0f;\n"
+        "  const float pixelCenterBias = 0.5f * (surfaceScaleFactor - 1.0f) / surfaceScaleFactor;\n"
+        "  return vec2(pixelCenterBias);\n"
+        "}\n"
         "vec2 roundScreenCoords(vec2 pos) {\n"
-        "  return trunc(pos * 16.0f) / 16.0f;\n"
-        "}\n");
+        "  vec2 rounded = trunc(pos * 16.0f) / 16.0f;\n"
+        "  return rounded - scaledPixelCenterBias(rounded);\n"
+        "}\n",
+        state->apply_scaled_pixel_center_bias ? state->surface_scale_factor : 1);
 
     pgraph_glsl_get_vtx_header(header, opts.vulkan, state->smooth_shading,
                                false, opts.prefix_outputs, false);

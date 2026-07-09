@@ -37,7 +37,8 @@
 
 static int g_use_hard_fpu;
 
-#if defined(XBOX) && defined(__x86_64__)
+#if defined(XBOX) && (defined(__x86_64__) || defined(_M_X64)) && \
+    defined(CONFIG_XEMU_HARD_FPU)
 #include "ui/xemu-settings.h"
 #define MAP_GEN_HELPER_SOFT_HARD(name) \
     (g_use_hard_fpu ? gen_helper_##name##__hard : gen_helper_##name##__soft)
@@ -121,7 +122,7 @@ static int g_use_hard_fpu;
 #define gen_helper_fldenv         MAP_GEN_HELPER_SOFT_HARD(fldenv)
 #define gen_helper_fsave          MAP_GEN_HELPER_SOFT_HARD(fsave)
 #define gen_helper_frstor         MAP_GEN_HELPER_SOFT_HARD(frstor)
-#endif /* defined(XBOX) && defined(__x86_64__) */
+#endif /* XBOX && x86_64 && CONFIG_XEMU_HARD_FPU */
 
 #define HELPER_H "helper.h"
 #include "exec/helper-info.c.inc"
@@ -229,7 +230,11 @@ typedef struct DisasContext {
     TCGv_i32 tmp2_i32;
     TCGv_i64 tmp1_i64;
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    jmp_buf jmpbuf;
+#else
     sigjmp_buf jmpbuf;
+#endif
     TCGOp *prev_insn_start;
     TCGOp *prev_insn_end;
 
@@ -239,6 +244,14 @@ typedef struct DisasContext {
     TCGv_fp fpregs[8];
     TCGv_fp ft0;
 } DisasContext;
+
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+#define i386_sigsetjmp(env) setjmp(env)
+#define i386_siglongjmp(env, val) longjmp(env, val)
+#else
+#define i386_sigsetjmp(env) sigsetjmp(env, 0)
+#define i386_siglongjmp(env, val) siglongjmp(env, val)
+#endif
 
 /*
  * Point EIP to next instruction before ending translation.
@@ -844,19 +857,39 @@ static void gen_reset_hflag(DisasContext *s, uint32_t mask)
 static void gen_set_eflags(DisasContext *s, target_ulong mask)
 {
     TCGv t = tcg_temp_new();
+    uint32_t hmask = mask & (HF_TF_MASK | HF_IOPL_MASK | HF_RF_MASK |
+                             HF_VM_MASK | HF_AC_MASK);
 
     tcg_gen_ld_tl(t, tcg_env, offsetof(CPUX86State, eflags));
     tcg_gen_ori_tl(t, t, mask);
     tcg_gen_st_tl(t, tcg_env, offsetof(CPUX86State, eflags));
+
+    if (hmask) {
+        TCGv_i32 h = tcg_temp_new_i32();
+
+        tcg_gen_ld_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+        tcg_gen_ori_i32(h, h, hmask);
+        tcg_gen_st_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+    }
 }
 
 static void gen_reset_eflags(DisasContext *s, target_ulong mask)
 {
     TCGv t = tcg_temp_new();
+    uint32_t hmask = mask & (HF_TF_MASK | HF_IOPL_MASK | HF_RF_MASK |
+                             HF_VM_MASK | HF_AC_MASK);
 
     tcg_gen_ld_tl(t, tcg_env, offsetof(CPUX86State, eflags));
     tcg_gen_andi_tl(t, t, ~mask);
     tcg_gen_st_tl(t, tcg_env, offsetof(CPUX86State, eflags));
+
+    if (hmask) {
+        TCGv_i32 h = tcg_temp_new_i32();
+
+        tcg_gen_ld_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+        tcg_gen_andi_i32(h, h, ~hmask);
+        tcg_gen_st_i32(h, tcg_env, offsetof(CPUX86State, hflags));
+    }
 }
 
 static void gen_helper_in_func(MemOp ot, TCGv v, TCGv_i32 n)
@@ -2143,7 +2176,7 @@ static uint64_t advance_pc(CPUX86State *env, DisasContext *s, int num_bytes)
     /* This is a subsequent insn that crosses a page boundary.  */
     if (s->base.num_insns > 1 &&
         !translator_is_same_page(&s->base, s->pc + num_bytes - 1)) {
-        siglongjmp(s->jmpbuf, 2);
+        i386_siglongjmp(s->jmpbuf, 2);
     }
 
     s->pc += num_bytes;
@@ -2157,7 +2190,7 @@ static uint64_t advance_pc(CPUX86State *env, DisasContext *s, int num_bytes)
             (void)translator_ldub(env, &s->base,
                                   (s->pc - 1) & TARGET_PAGE_MASK);
         }
-        siglongjmp(s->jmpbuf, 1);
+        i386_siglongjmp(s->jmpbuf, 1);
     }
 
     return pc;
@@ -4227,8 +4260,11 @@ void tcg_x86_init(void)
     fpstt = tcg_global_mem_new_i32(tcg_env,
                                    offsetof(CPUX86State, fpstt), "fpstt");
 
-#if defined(XBOX) && defined(__x86_64__)
+#if defined(XBOX) && (defined(__x86_64__) || defined(_M_X64)) && \
+    defined(CONFIG_XEMU_HARD_FPU)
     g_use_hard_fpu = g_config.perf.hard_fpu;
+#else
+    g_use_hard_fpu = 0;
 #endif
 }
 
@@ -4310,12 +4346,30 @@ static void i386_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
     tcg_gen_insn_start(pc_arg, dc->cc_op);
 }
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+static int __attribute__((noinline))
+i386_tr_translate_insn_setjmp(DisasContext *dc, CPUState *cpu)
+{
+    int ret = i386_sigsetjmp(dc->jmpbuf);
+
+    if (ret == 0) {
+        disas_insn(dc, cpu);
+    }
+
+    return ret;
+}
+#endif
+
 static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
     DisasContext *dc = container_of(dcbase, DisasContext, base);
-    bool orig_cc_op_dirty = dc->cc_op_dirty;
-    CCOp orig_cc_op = dc->cc_op;
-    target_ulong orig_pc_save = dc->pc_save;
+    volatile bool orig_cc_op_dirty = dc->cc_op_dirty;
+    volatile CCOp orig_cc_op = dc->cc_op;
+    volatile target_ulong orig_pc_save = dc->pc_save;
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    TCGOp * volatile orig_prev_insn_end = dc->prev_insn_end;
+    TCGOp * volatile orig_prev_insn_start = dc->prev_insn_start;
+#endif
 
 #ifdef TARGET_VSYSCALL_PAGE
     /*
@@ -4328,9 +4382,15 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     }
 #endif
 
-    switch (sigsetjmp(dc->jmpbuf, 0)) {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    switch (i386_tr_translate_insn_setjmp(dc, cpu)) {
+#else
+    switch (i386_sigsetjmp(dc->jmpbuf)) {
+#endif
     case 0:
+#ifndef QEMU_WIN32_SIGJMP_DEFINED
         disas_insn(dc, cpu);
+#endif
         break;
     case 1:
         gen_exception_gpf(dc);
@@ -4338,12 +4398,20 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     case 2:
         /* Restore state that may affect the next instruction. */
         dc->pc = dc->base.pc_next;
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        dc->cc_op_dirty = orig_cc_op_dirty;
+        dc->cc_op = orig_cc_op;
+        dc->pc_save = orig_pc_save;
+        tcg_remove_ops_after(orig_prev_insn_end);
+        dc->base.insn_start = orig_prev_insn_start;
+#else
         assert(dc->cc_op_dirty == orig_cc_op_dirty);
         assert(dc->cc_op == orig_cc_op);
         assert(dc->pc_save == orig_pc_save);
-        dc->base.num_insns--;
         tcg_remove_ops_after(dc->prev_insn_end);
         dc->base.insn_start = dc->prev_insn_start;
+#endif
+        dc->base.num_insns--;
         dc->base.is_jmp = DISAS_TOO_MANY;
         return;
     default:

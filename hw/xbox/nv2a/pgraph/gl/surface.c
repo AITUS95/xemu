@@ -133,18 +133,18 @@ static void init_render_to_texture(PGRAPHState *pg)
     const char *fs =
         "#version 330\n"
         "uniform sampler2D tex;\n"
-        "uniform vec2 surface_size;\n"
+        "uniform vec2 surface_origin;\n"
         "layout(location = 0) out vec4 out_Color;\n"
         "void main()\n"
         "{\n"
-        "    vec2 texCoord = gl_FragCoord.xy / textureSize(tex, 0).xy;\n"
+        "    vec2 texCoord = (surface_origin + gl_FragCoord.xy) / textureSize(tex, 0).xy;\n"
         "    out_Color.rgba = texture(tex, texCoord);\n"
         "}\n";
 
     r->s2t_rndr.prog = pgraph_gl_compile_shader(vs, fs);
     r->s2t_rndr.tex_loc = glGetUniformLocation(r->s2t_rndr.prog, "tex");
-    r->s2t_rndr.surface_size_loc = glGetUniformLocation(r->s2t_rndr.prog,
-                                                    "surface_size");
+    r->s2t_rndr.surface_origin_loc = glGetUniformLocation(r->s2t_rndr.prog,
+                                                          "surface_origin");
 
     glGenVertexArrays(1, &r->s2t_rndr.vao);
     glBindVertexArray(r->s2t_rndr.vao);
@@ -171,22 +171,13 @@ static void finalize_render_to_texture(PGRAPHState *pg)
     r->s2t_rndr.fbo = 0;
 }
 
-static bool surface_to_texture_can_fastpath(SurfaceBinding *surface,
-                                            TextureShape *shape)
+static bool surface_texture_formats_compatible(int surface_fmt,
+                                               int texture_fmt)
 {
-    // FIXME: Better checks/handling on formats and surface-texture compat
-
-    int surface_fmt = surface->shape.color_format;
-    int texture_fmt = shape->color_format;
-
-    if (!surface->color) {
-        // FIXME: Support zeta to color
-        return false;
-    }
-
     switch (surface_fmt) {
     case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_Z1R5G5B5: switch (texture_fmt) {
         case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5: return true;
+        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X1R5G5B5: return true;
         default: break;
         }
         break;
@@ -206,6 +197,9 @@ static bool surface_to_texture_can_fastpath(SurfaceBinding *surface,
         case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8: return true;
         case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8: return true;
         case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8: return true;
+        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8B8G8R8: return true;
+        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_B8G8R8A8: return true;
+        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8G8B8A8: return true;
         case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8R8G8B8: return true;
         default: break;
         }
@@ -213,15 +207,152 @@ static bool surface_to_texture_can_fastpath(SurfaceBinding *surface,
     default: break;
     }
 
+    return false;
+}
+
+static bool zeta_surface_texture_formats_compatible(
+    const SurfaceBinding *surface,
+    const TextureShape *shape)
+{
+    if (surface->shape.z_format || shape->dimensionality != 2) {
+        return false;
+    }
+
+    switch (surface->shape.zeta_format) {
+    case NV097_SET_SURFACE_FORMAT_ZETA_Z16:
+        switch (shape->color_format) {
+        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_DEPTH_Y16_FIXED:
+        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_Y16_FIXED:
+            return true;
+        default:
+            break;
+        }
+        break;
+    case NV097_SET_SURFACE_FORMAT_ZETA_Z24S8:
+        switch (shape->color_format) {
+        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_X8_Y24_FIXED:
+            return true;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return false;
+}
+
+static bool surface_to_texture_can_fastpath(SurfaceBinding *surface,
+                                            TextureShape *shape)
+{
+    // FIXME: Better checks/handling on formats and surface-texture compat
+
+    int surface_fmt = surface->shape.color_format;
+    int texture_fmt = shape->color_format;
+
+    if (!surface->color) {
+        // FIXME: Support zeta to color
+        return false;
+    }
+
+    if (surface_texture_formats_compatible(surface_fmt, texture_fmt)) {
+        return true;
+    }
+
     trace_nv2a_pgraph_surface_texture_compat_failed(
         surface_fmt, texture_fmt);
     return false;
 }
 
+static void ensure_render_texture_storage(TextureBinding *texture,
+                                          GLint internal_format,
+                                          unsigned int width,
+                                          unsigned int height,
+                                          GLenum format,
+                                          GLenum type)
+{
+    if (texture->render_width == width &&
+        texture->render_height == height &&
+        texture->render_internal_format == internal_format) {
+        return;
+    }
+
+    glTexImage2D(texture->gl_target, 0, internal_format, width, height, 0,
+                 format, type, NULL);
+    texture->render_width = width;
+    texture->render_height = height;
+    texture->render_internal_format = internal_format;
+}
+
+static void copy_zeta_surface_to_texture(NV2AState *d,
+                                         const SurfaceBinding *surface,
+                                         TextureBinding *texture,
+                                         TextureShape *texture_shape,
+                                         int texture_unit,
+                                         unsigned int source_x,
+                                         unsigned int source_y)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHGLState *r = pg->gl_renderer_state;
+    const ColorFormatInfo *f =
+        &kelvin_color_format_gl_map[texture_shape->color_format];
+    GLint gl_internal_format = f->gl_internal_format;
+    GLenum gl_format = f->gl_format;
+    GLenum gl_type = f->gl_type;
+    unsigned int width = texture_shape->width;
+    unsigned int height = texture_shape->height;
+    unsigned int copy_x = source_x * pg->surface_scale_factor;
+    unsigned int copy_y = source_y * pg->surface_scale_factor;
+
+    if (texture_shape->color_format ==
+        NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_X8_Y24_FIXED) {
+        gl_internal_format = GL_DEPTH_COMPONENT24;
+        gl_format = GL_DEPTH_COMPONENT;
+        gl_type = GL_UNSIGNED_INT;
+    }
+
+    pgraph_apply_scaling_factor(pg, &width, &height);
+
+    glActiveTexture(GL_TEXTURE0 + texture_unit);
+    glBindTexture(texture->gl_target, texture->gl_texture);
+    glTexParameteri(texture->gl_target, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(texture->gl_target, GL_TEXTURE_MAX_LEVEL, 0);
+    glTexParameteri(texture->gl_target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    ensure_render_texture_storage(texture, gl_internal_format, width, height,
+                                  gl_format, gl_type);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, r->s2t_rndr.fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, surface->fmt.gl_attachment,
+                           GL_TEXTURE_2D, surface->gl_buffer, 0);
+    glReadBuffer(GL_NONE);
+    glDrawBuffer(GL_NONE);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+           GL_FRAMEBUFFER_COMPLETE);
+
+    glCopyTexSubImage2D(texture->gl_target, 0, 0, 0, copy_x, copy_y,
+                        width, height);
+    assert(glGetError() == GL_NO_ERROR);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, surface->fmt.gl_attachment,
+                           GL_TEXTURE_2D, 0, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, r->gl_framebuffer);
+    glBindTexture(texture->gl_target, texture->gl_texture);
+    glUseProgram(
+        r->shader_binding ? r->shader_binding->gl_program : 0);
+}
+
 static void render_surface_to(NV2AState *d, SurfaceBinding *surface,
                               int texture_unit, GLuint gl_target,
                               GLuint gl_texture, unsigned int width,
-                              unsigned int height)
+                              unsigned int height, unsigned int source_x,
+                              unsigned int source_y)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
@@ -248,7 +379,9 @@ static void render_surface_to(NV2AState *d, SurfaceBinding *surface,
     glProgramUniform1i(r->s2t_rndr.prog, r->s2t_rndr.tex_loc,
                        texture_unit);
     glProgramUniform2f(r->s2t_rndr.prog,
-                       r->s2t_rndr.surface_size_loc, width, height);
+                       r->s2t_rndr.surface_origin_loc,
+                       source_x * pg->surface_scale_factor,
+                       source_y * pg->surface_scale_factor);
 
     glViewport(0, 0, width, height);
     glColorMask(true, true, true, true);
@@ -313,7 +446,9 @@ static void render_surface_to_texture_slow(NV2AState *d,
 void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface,
                                       TextureBinding *texture,
                                       TextureShape *texture_shape,
-                                      int texture_unit)
+                                      int texture_unit,
+                                      unsigned int source_x,
+                                      unsigned int source_y)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
@@ -323,6 +458,12 @@ void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface,
     assert(texture_shape->color_format < ARRAY_SIZE(kelvin_color_format_gl_map));
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
+
+    if (!surface->color) {
+        copy_zeta_surface_to_texture(d, surface, texture, texture_shape,
+                                     texture_unit, source_x, source_y);
+        return;
+    }
 
     if (!surface_to_texture_can_fastpath(surface, texture_shape)) {
         render_surface_to_texture_slow(d, surface, texture,
@@ -338,11 +479,12 @@ void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface,
     glTexParameteri(texture->gl_target, GL_TEXTURE_BASE_LEVEL, 0);
     glTexParameteri(texture->gl_target, GL_TEXTURE_MAX_LEVEL, 0);
     glTexParameteri(texture->gl_target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexImage2D(texture->gl_target, 0, f->gl_internal_format, width, height, 0,
-                 f->gl_format, f->gl_type, NULL);
+    ensure_render_texture_storage(texture, f->gl_internal_format, width,
+                                  height, f->gl_format, f->gl_type);
     glBindTexture(texture->gl_target, 0);
     render_surface_to(d, surface, texture_unit, texture->gl_target,
-                             texture->gl_texture, width, height);
+                             texture->gl_texture, width, height, source_x,
+                             source_y);
     glBindTexture(texture->gl_target, texture->gl_texture);
     glUseProgram(
         r->shader_binding ? r->shader_binding->gl_program : 0);
@@ -350,22 +492,77 @@ void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface,
 
 bool pgraph_gl_check_surface_to_texture_compatibility(
     const SurfaceBinding *surface,
-    const TextureShape *shape)
+    const TextureShape *shape,
+    hwaddr texture_vram_offset,
+    bool texture_uses_mipmaps,
+    unsigned int *source_x,
+    unsigned int *source_y)
 {
     // FIXME: Better checks/handling on formats and surface-texture compat
 
-    if ((!surface->swizzle && surface->pitch != shape->pitch) ||
-        surface->width != shape->width ||
-        surface->height != shape->height) {
+    if (!shape->width || !shape->height ||
+        surface->width < shape->width ||
+        surface->height < shape->height) {
         return false;
     }
 
-    int surface_fmt = surface->shape.color_format;
-    int texture_fmt = shape->color_format;
+    if (!surface->swizzle && surface->pitch != shape->pitch) {
+        return false;
+    }
+
+    if (texture_vram_offset < surface->vram_addr ||
+        !surface->pitch || !surface->fmt.bytes_per_pixel) {
+        return false;
+    }
+
+    unsigned int origin_x = 0;
+    unsigned int origin_y = 0;
+    hwaddr texture_offset = texture_vram_offset - surface->vram_addr;
+    if (texture_offset) {
+        if (surface->swizzle) {
+            if (!swizzle_offset_to_xy(surface->width, surface->height,
+                                      surface->fmt.bytes_per_pixel,
+                                      texture_offset, &origin_x, &origin_y)) {
+                return false;
+            }
+            if (origin_x % shape->width || origin_y % shape->height) {
+                return false;
+            }
+        } else {
+            if (texture_offset % surface->fmt.bytes_per_pixel) {
+                return false;
+            }
+
+            hwaddr row_offset = texture_offset % surface->pitch;
+            if (row_offset % surface->fmt.bytes_per_pixel) {
+                return false;
+            }
+
+            origin_x = row_offset / surface->fmt.bytes_per_pixel;
+            origin_y = texture_offset / surface->pitch;
+        }
+
+        if (origin_x + shape->width > surface->width ||
+            origin_y + shape->height > surface->height) {
+            return false;
+        }
+    }
 
     if (!surface->color) {
         // FIXME: Support zeta to color
-        return false;
+        if (!shape->cubemap &&
+            !(shape->levels > 1 && texture_uses_mipmaps) &&
+            zeta_surface_texture_formats_compatible(surface, shape)) {
+            if (source_x) {
+                *source_x = origin_x;
+            }
+            if (source_y) {
+                *source_y = origin_y;
+            }
+            return true;
+        } else {
+            return false;
+        }
     }
 
     if (shape->cubemap) {
@@ -373,44 +570,26 @@ bool pgraph_gl_check_surface_to_texture_compatibility(
         return false;
     }
 
-    if (shape->levels > 1) {
-        // FIXME: Support rendering surface to mip levels
+    if (shape->levels > 1 && texture_uses_mipmaps) {
+        // FIXME: Support rendering surface to mip levels.
         return false;
     }
 
-    switch (surface_fmt) {
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X1R5G5B5_Z1R5G5B5: switch (texture_fmt) {
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5: return true;
-        default: break;
-        }
-        break;
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_R5G6B5: switch (texture_fmt) {
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R5G6B5: return true;
-        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R5G6B5: return true;
-        default: break;
-        }
-        break;
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_X8R8G8B8_Z8R8G8B8: switch(texture_fmt) {
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X8R8G8B8: return true;
-        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X8R8G8B8: return true;
-        default: break;
-        }
-        break;
-    case NV097_SET_SURFACE_FORMAT_COLOR_LE_A8R8G8B8: switch (texture_fmt) {
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8: return true;
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8: return true;
-        case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8: return true;
-        case NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8R8G8B8: return true;
-        default: break;
-        }
-        break;
-    default:
-        break;
+    int surface_fmt = surface->shape.color_format;
+    int texture_fmt = shape->color_format;
+    if (!surface_texture_formats_compatible(surface_fmt, texture_fmt)) {
+        trace_nv2a_pgraph_surface_texture_compat_failed(
+            surface_fmt, texture_fmt);
+        return false;
     }
 
-    trace_nv2a_pgraph_surface_texture_compat_failed(
-        surface_fmt, texture_fmt);
-    return false;
+    if (source_x) {
+        *source_x = origin_x;
+    }
+    if (source_y) {
+        *source_y = origin_y;
+    }
+    return true;
 }
 
 static bool check_surface_overlaps_range(const SurfaceBinding *surface,
@@ -592,7 +771,7 @@ static void surface_evict_old(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHGLState *r = pg->gl_renderer_state;
 
-    const int surface_age_limit = 5;
+    const int surface_age_limit = 10;
 
     SurfaceBinding *s, *next;
     QTAILQ_FOREACH_SAFE(s, &r->surfaces, entry, next) {

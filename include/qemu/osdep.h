@@ -114,19 +114,125 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <stdio.h>
 
 #include <string.h>
+#ifdef _MSC_VER
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#else
 #include <strings.h>
+#endif
 #include <inttypes.h>
 #include <limits.h>
+#ifdef _MSC_VER
+#include <io.h>
+#include <process.h>
+typedef intptr_t ssize_t;
+typedef int64_t off64_t;
+typedef int mode_t;
+typedef int pid_t;
+#ifndef SSIZE_MAX
+#define SSIZE_MAX INTPTR_MAX
+#endif
+#ifndef PATH_MAX
+#define PATH_MAX _MAX_PATH
+#endif
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef X_OK
+#define X_OK 1
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#ifndef STDIN_FILENO
+#define STDIN_FILENO 0
+#endif
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef STDERR_FILENO
+#define STDERR_FILENO 2
+#endif
+#else
 /* Put unistd.h before time.h as that triggers localtime_r/gmtime_r
  * function availability on recentish Mingw-w64 platforms. */
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#ifdef _MSC_VER
+#ifndef O_RDONLY
+#define O_RDONLY _O_RDONLY
+#endif
+#ifndef O_WRONLY
+#define O_WRONLY _O_WRONLY
+#endif
+#ifndef O_RDWR
+#define O_RDWR _O_RDWR
+#endif
+#ifndef O_ACCMODE
+#define O_ACCMODE (O_RDONLY | O_WRONLY | O_RDWR)
+#endif
+#endif
+#ifndef _MSC_VER
 #include <getopt.h>
+#endif
 #include <sys/stat.h>
+#ifdef _MSC_VER
+#ifndef S_IRUSR
+#define S_IRUSR _S_IREAD
+#endif
+#ifndef S_IWUSR
+#define S_IWUSR _S_IWRITE
+#endif
+#ifndef S_IXUSR
+#define S_IXUSR _S_IEXEC
+#endif
+#ifndef S_IRGRP
+#define S_IRGRP S_IRUSR
+#endif
+#ifndef S_IWGRP
+#define S_IWGRP S_IWUSR
+#endif
+#ifndef S_IXGRP
+#define S_IXGRP S_IXUSR
+#endif
+#ifndef S_IROTH
+#define S_IROTH S_IRUSR
+#endif
+#ifndef S_IWOTH
+#define S_IWOTH S_IWUSR
+#endif
+#ifndef S_IXOTH
+#define S_IXOTH S_IXUSR
+#endif
+#ifndef S_IRWXU
+#define S_IRWXU (S_IRUSR | S_IWUSR | S_IXUSR)
+#endif
+#ifndef S_IRWXG
+#define S_IRWXG (S_IRGRP | S_IWGRP | S_IXGRP)
+#endif
+#ifndef S_IRWXO
+#define S_IRWXO (S_IROTH | S_IWOTH | S_IXOTH)
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(mode) (((mode) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(mode) (((mode) & _S_IFMT) == _S_IFREG)
+#endif
+#ifndef S_ISFIFO
+#define S_ISFIFO(mode) 0
+#endif
+#endif
+#ifndef _MSC_VER
 #include <sys/time.h>
+#endif
 #include <assert.h>
 /* setjmp must be declared before system/os-win32.h
  * because it is redefined there. */
@@ -176,6 +282,10 @@ QEMU_EXTERN_C int daemon(int, int);
 
 #ifdef _WIN32
 #include "system/os-win32.h"
+#endif
+
+#ifdef _MSC_VER
+#define sleep(seconds) Sleep((DWORD)(seconds) * 1000U)
 #endif
 
 #if defined(CONFIG_POSIX) && !defined(EMSCRIPTEN)
@@ -691,6 +801,20 @@ ssize_t writev(int fd, const struct iovec *iov, int iov_cnt);
 #endif
 
 #ifdef _WIN32
+#ifdef _MSC_VER
+static inline int gettimeofday(struct timeval *tv, void *tz)
+{
+    int64_t now = g_get_real_time();
+
+    (void)tz;
+    if (tv) {
+        tv->tv_sec = (long)(now / G_USEC_PER_SEC);
+        tv->tv_usec = (long)(now % G_USEC_PER_SEC);
+    }
+    return 0;
+}
+#endif
+
 static inline void qemu_timersub(const struct timeval *val1,
                                  const struct timeval *val2,
                                  struct timeval *res)
@@ -800,6 +924,69 @@ static inline intptr_t qemu_real_host_page_mask(void)
     return -(intptr_t)qemu_real_host_page_size();
 }
 
+#ifdef _MSC_VER
+static char *optarg;
+static int optind = 1;
+static int optopt;
+static char *qemu_msvc_optpos;
+
+static inline int getopt(int argc, char * const argv[], const char *optstring)
+{
+    const char *opt;
+    int option;
+
+    optarg = NULL;
+
+    if (optind == 0) {
+        optind = 1;
+    }
+
+    if (!qemu_msvc_optpos || *qemu_msvc_optpos == '\0') {
+        if (optind >= argc || argv[optind][0] != '-' ||
+            argv[optind][1] == '\0') {
+            return -1;
+        }
+        if (strcmp(argv[optind], "--") == 0) {
+            optind++;
+            return -1;
+        }
+        qemu_msvc_optpos = argv[optind] + 1;
+    }
+
+    option = *qemu_msvc_optpos++;
+    optopt = option;
+    opt = strchr(optstring, option);
+    if (!opt || option == ':') {
+        if (*qemu_msvc_optpos == '\0') {
+            optind++;
+            qemu_msvc_optpos = NULL;
+        }
+        return '?';
+    }
+
+    if (opt[1] == ':') {
+        if (*qemu_msvc_optpos != '\0') {
+            optarg = qemu_msvc_optpos;
+            optind++;
+            qemu_msvc_optpos = NULL;
+        } else if (optind + 1 < argc) {
+            optarg = argv[++optind];
+            optind++;
+            qemu_msvc_optpos = NULL;
+        } else {
+            optind++;
+            qemu_msvc_optpos = NULL;
+            return optstring[0] == ':' ? ':' : '?';
+        }
+    } else if (*qemu_msvc_optpos == '\0') {
+        optind++;
+        qemu_msvc_optpos = NULL;
+    }
+
+    return option;
+}
+#endif
+
 /*
  * After using getopt or getopt_long, if you need to parse another set
  * of options, then you must reset optind.  Unfortunately the way to
@@ -807,7 +994,11 @@ static inline intptr_t qemu_real_host_page_mask(void)
  */
 static inline void qemu_reset_optind(void)
 {
-#ifdef HAVE_OPTRESET
+#ifdef _MSC_VER
+    optind = 1;
+    optarg = NULL;
+    qemu_msvc_optpos = NULL;
+#elif defined(HAVE_OPTRESET)
     optind = 1;
     optreset = 1;
 #else

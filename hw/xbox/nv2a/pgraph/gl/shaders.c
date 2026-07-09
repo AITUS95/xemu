@@ -255,29 +255,102 @@ static const char *shader_gl_vendor = NULL;
 
 static void shader_create_cache_folder(void)
 {
-    char *shader_path = g_strdup_printf("%sshaders", xemu_settings_get_base_path());
+    char *shader_path =
+        g_strdup_printf("%sopengl/shaders", xemu_settings_get_base_path());
     qemu_mkdir(shader_path);
     g_free(shader_path);
 }
 
-static char *shader_get_lru_cache_path(void)
+static void shader_binding_set_cache_key(ShaderBinding *binding,
+                                         const char *cache_key)
 {
-    return g_strdup_printf("%s/shader_cache_list", xemu_settings_get_base_path());
+    g_free(binding->cache_key);
+    binding->cache_key = cache_key ? g_strdup(cache_key) : NULL;
 }
 
-static void shader_write_lru_list_entry_to_disk(Lru *lru, LruNode *node, void *opaque)
+static char *shader_get_lru_cache_dir(const char *cache_key)
 {
-    FILE *lru_list_file = (FILE*) opaque;
-    size_t written = fwrite(&node->hash, sizeof(uint64_t), 1, lru_list_file);
+    return g_strdup_printf("%sopengl/shaders/%s",
+                           xemu_settings_get_base_path(), cache_key);
+}
+
+static char *shader_get_lru_cache_path(const char *cache_key)
+{
+    return g_strdup_printf("%sopengl/shaders/%s/shader_cache_list",
+                           xemu_settings_get_base_path(), cache_key);
+}
+
+static char *shader_get_legacy_lru_cache_path(void)
+{
+    return g_strdup_printf("%sshader_cache_list",
+                           xemu_settings_get_base_path());
+}
+
+typedef struct ShaderLruWriter {
+    GHashTable *files;
+} ShaderLruWriter;
+
+static FILE *shader_lru_writer_get_file(ShaderLruWriter *writer,
+                                        const char *cache_key)
+{
+    FILE *lru_list_file = g_hash_table_lookup(writer->files, cache_key);
+
+    if (lru_list_file) {
+        return lru_list_file;
+    }
+
+    g_autofree char *cache_dir = shader_get_lru_cache_dir(cache_key);
+    g_autofree char *cache_path = shader_get_lru_cache_path(cache_key);
+
+    if (g_mkdir_with_parents(cache_dir, 0700) < 0) {
+        return NULL;
+    }
+
+    lru_list_file = qemu_fopen(cache_path, "wb");
+    if (!lru_list_file) {
+        return NULL;
+    }
+
+    g_hash_table_insert(writer->files, g_strdup(cache_key), lru_list_file);
+    return lru_list_file;
+}
+
+static void shader_write_lru_list_entry_to_disk(Lru *lru, LruNode *node,
+                                                void *opaque)
+{
+    ShaderBinding *binding = container_of(node, ShaderBinding, node);
+    ShaderLruWriter *writer = opaque;
+    FILE *lru_list_file;
+    size_t written;
+
+    if (!binding->cache_key) {
+        return;
+    }
+
+    lru_list_file = shader_lru_writer_get_file(writer, binding->cache_key);
+    if (!lru_list_file) {
+        return;
+    }
+
+    written = fwrite(&node->hash, sizeof(uint64_t), 1, lru_list_file);
     if (written != 1) {
         fprintf(stderr, "nv2a: Failed to write shader list entry %llx to disk\n",
                 (unsigned long long) node->hash);
     }
 }
 
+static void shader_close_lru_list_file(gpointer key, gpointer value,
+                                       gpointer user_data)
+{
+    (void)key;
+    (void)user_data;
+    fclose((FILE *)value);
+}
+
 void pgraph_gl_shader_write_cache_reload_list(PGRAPHState *pg)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
+    ShaderLruWriter writer;
 
     if (!g_config.perf.cache_shaders) {
         qatomic_set(&r->shader_cache_writeback_pending, false);
@@ -285,18 +358,13 @@ void pgraph_gl_shader_write_cache_reload_list(PGRAPHState *pg)
         return;
     }
 
-    char *shader_lru_path = shader_get_lru_cache_path();
+    writer.files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
     qemu_thread_join(&r->shader_disk_thread);
-
-    FILE *lru_list = qemu_fopen(shader_lru_path, "wb");
-    g_free(shader_lru_path);
-    if (!lru_list) {
-        fprintf(stderr, "nv2a: Failed to open shader LRU cache for writing\n");
-        return;
-    }
-
-    lru_visit_active(&r->shader_cache, shader_write_lru_list_entry_to_disk, lru_list);
-    fclose(lru_list);
+    lru_visit_active(&r->shader_cache, shader_write_lru_list_entry_to_disk,
+                     &writer);
+    g_hash_table_foreach(writer.files, shader_close_lru_list_file, NULL);
+    g_hash_table_destroy(writer.files);
 
     lru_flush(&r->shader_cache);
 
@@ -362,12 +430,19 @@ bool pgraph_gl_shader_load_from_memory(ShaderBinding *binding)
     return true;
 }
 
-static char *shader_get_bin_directory(uint64_t hash)
+static char *shader_get_bin_directory(const char *cache_key, uint64_t hash)
 {
-    const char *cfg_dir = xemu_settings_get_base_path();
     char *shader_bin_dir =
-        g_strdup_printf("%s/shaders/%04x", cfg_dir, (uint32_t)(hash >> 48));
+        g_strdup_printf("%sopengl/shaders/%s/%04x",
+                        xemu_settings_get_base_path(), cache_key,
+                        (uint32_t)(hash >> 48));
     return shader_bin_dir;
+}
+
+static char *shader_get_legacy_bin_directory(uint64_t hash)
+{
+    return g_strdup_printf("%sshaders/%04x", xemu_settings_get_base_path(),
+                           (uint32_t)(hash >> 48));
 }
 
 static char *shader_get_binary_path(const char *shader_bin_dir, uint64_t hash)
@@ -376,30 +451,79 @@ static char *shader_get_binary_path(const char *shader_bin_dir, uint64_t hash)
     return g_strdup_printf("%s/%012" PRIx64, shader_bin_dir, hash & ~bin_mask);
 }
 
-static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
+static bool shader_write_cached_binary_file(const char *cache_key, uint64_t hash,
+                                            GLenum program_format,
+                                            const ShaderState *state,
+                                            const void *program,
+                                            size_t program_size)
+{
+    g_autofree char *shader_bin = NULL;
+    g_autofree char *shader_path = NULL;
+    FILE *shader_file = NULL;
+    size_t written;
+
+    static uint64_t gl_vendor_len;
+    if (gl_vendor_len == 0) {
+        gl_vendor_len = (uint64_t)(strlen(shader_gl_vendor) + 1);
+    }
+
+    static uint64_t build_id_len = 0;
+    if (build_id_len == 0) {
+        build_id_len = (uint64_t)(strlen(xemu_commit) + 1);
+    }
+
+    shader_bin = shader_get_bin_directory(cache_key, hash);
+    shader_path = shader_get_binary_path(shader_bin, hash);
+
+    if (g_mkdir_with_parents(shader_bin, 0700) < 0) {
+        return false;
+    }
+
+    shader_file = qemu_fopen(shader_path, "wb");
+    if (!shader_file) {
+        return false;
+    }
+
+#define WRITE_OR_ERR(data, data_size) \
+    do { \
+        written = fwrite(data, data_size, 1, shader_file); \
+        if (written != 1) { \
+            fclose(shader_file); \
+            qemu_unlink(shader_path); \
+            return false; \
+        } \
+    } while (0)
+
+    WRITE_OR_ERR(&build_id_len, sizeof(build_id_len));
+    WRITE_OR_ERR(xemu_commit, build_id_len);
+    WRITE_OR_ERR(&gl_vendor_len, sizeof(gl_vendor_len));
+    WRITE_OR_ERR(shader_gl_vendor, gl_vendor_len);
+    WRITE_OR_ERR(&program_format, sizeof(program_format));
+    WRITE_OR_ERR(state, sizeof(*state));
+    WRITE_OR_ERR(&program_size, sizeof(program_size));
+    WRITE_OR_ERR(program, program_size);
+
+#undef WRITE_OR_ERR
+
+    fclose(shader_file);
+    return true;
+}
+
+static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
+                                       const char *shader_path,
+                                       const char *cache_key,
+                                       const char *migrate_cache_key)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
-
-    char *shader_bin_dir = shader_get_bin_directory(hash);
-    char *shader_path = shader_get_binary_path(shader_bin_dir, hash);
-    char *cached_xemu_version = NULL;
+    char *cached_build_id = NULL;
     char *cached_gl_vendor = NULL;
     void *program_buffer = NULL;
 
-    uint64_t cached_xemu_version_len;
+    uint64_t cached_build_id_len;
     uint64_t gl_vendor_len;
     GLenum program_binary_format;
     ShaderState state;
     size_t shader_size;
-
-    g_free(shader_bin_dir);
-
-    qemu_mutex_lock(&r->shader_cache_lock);
-    if (lru_contains_hash(&r->shader_cache, hash)) {
-        qemu_mutex_unlock(&r->shader_cache_lock);
-        return;
-    }
-    qemu_mutex_unlock(&r->shader_cache_lock);
 
     FILE *shader_file = qemu_fopen(shader_path, "rb");
     if (!shader_file) {
@@ -416,11 +540,11 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
             } \
         } while (0)
 
-    READ_OR_ERR(&cached_xemu_version_len, sizeof(cached_xemu_version_len));
+    READ_OR_ERR(&cached_build_id_len, sizeof(cached_build_id_len));
 
-    cached_xemu_version = g_malloc(cached_xemu_version_len +1);
-    READ_OR_ERR(cached_xemu_version, cached_xemu_version_len);
-    if (strcmp(cached_xemu_version, xemu_version) != 0) {
+    cached_build_id = g_malloc(cached_build_id_len + 1);
+    READ_OR_ERR(cached_build_id, cached_build_id_len);
+    if (strcmp(cached_build_id, xemu_commit) != 0) {
         fclose(shader_file);
         goto error;
     }
@@ -444,34 +568,80 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
     #undef READ_OR_ERR
 
     fclose(shader_file);
-    g_free(shader_path);
-    g_free(cached_xemu_version);
+    g_free(cached_build_id);
     g_free(cached_gl_vendor);
+
+    if (migrate_cache_key &&
+        !shader_write_cached_binary_file(migrate_cache_key, hash,
+                                         program_binary_format, &state,
+                                         program_buffer, shader_size)) {
+        NV2A_DPRINTF("failed to migrate shader binary cache to title path\n");
+    }
 
     qemu_mutex_lock(&r->shader_cache_lock);
     LruNode *node = lru_lookup(&r->shader_cache, hash, &state);
     ShaderBinding *binding = container_of(node, ShaderBinding, node);
 
     /* If we happened to regenerate this shader already, then we may as well use the new one */
-    if (binding->initialized) {
+    if (binding->initialized || binding->program) {
         qemu_mutex_unlock(&r->shader_cache_lock);
-        return;
+        g_free(program_buffer);
+        return true;
     }
 
     binding->program_format = program_binary_format;
     binding->program_size = shader_size;
     binding->program = program_buffer;
     binding->cached = true;
+    shader_binding_set_cache_key(binding, cache_key);
     qemu_mutex_unlock(&r->shader_cache_lock);
-    return;
+    return true;
 
 error:
     /* Delete the shader so it won't be loaded again */
     qemu_unlink(shader_path);
-    g_free(shader_path);
     g_free(program_buffer);
-    g_free(cached_xemu_version);
+    g_free(cached_build_id);
     g_free(cached_gl_vendor);
+    return false;
+}
+
+static bool shader_load_from_disk(PGRAPHState *pg, uint64_t hash,
+                                  const char *cache_key)
+{
+    g_autofree char *shader_bin_dir = NULL;
+    g_autofree char *shader_path = NULL;
+
+    shader_bin_dir = shader_get_bin_directory(cache_key, hash);
+    shader_path = shader_get_binary_path(shader_bin_dir, hash);
+    if (shader_load_from_disk_path(pg, hash, shader_path, cache_key, NULL)) {
+        return true;
+    }
+
+    g_free(g_steal_pointer(&shader_bin_dir));
+    g_free(g_steal_pointer(&shader_path));
+    shader_bin_dir = shader_get_legacy_bin_directory(hash);
+    shader_path = shader_get_binary_path(shader_bin_dir, hash);
+    return shader_load_from_disk_path(pg, hash, shader_path, cache_key,
+                                      cache_key);
+}
+
+static void shader_reload_cache_list_from_path(PGRAPHState *pg,
+                                               const char *cache_key,
+                                               const char *shader_lru_path)
+{
+    FILE *lru_shaders_list = qemu_fopen(shader_lru_path, "rb");
+    uint64_t hash;
+
+    if (!lru_shaders_list) {
+        return;
+    }
+
+    while (fread(&hash, sizeof(uint64_t), 1, lru_shaders_list) == 1) {
+        shader_load_from_disk(pg, hash, cache_key);
+    }
+
+    fclose(lru_shaders_list);
 }
 
 static void *shader_reload_lru_from_disk(void *arg)
@@ -481,18 +651,11 @@ static void *shader_reload_lru_from_disk(void *arg)
     }
 
     PGRAPHState *pg = (PGRAPHState*) arg;
-    char *shader_lru_path = shader_get_lru_cache_path();
+    g_autofree char *global_lru_path = shader_get_lru_cache_path("global");
+    g_autofree char *legacy_lru_path = shader_get_legacy_lru_cache_path();
 
-    FILE *lru_shaders_list = qemu_fopen(shader_lru_path, "rb");
-    g_free(shader_lru_path);
-    if (!lru_shaders_list) {
-        return NULL;
-    }
-
-    uint64_t hash;
-    while (fread(&hash, sizeof(uint64_t), 1, lru_shaders_list) == 1) {
-        shader_load_from_disk(pg, hash);
-    }
+    shader_reload_cache_list_from_path(pg, "global", global_lru_path);
+    shader_reload_cache_list_from_path(pg, "global", legacy_lru_path);
 
     return NULL;
 }
@@ -503,6 +666,7 @@ static void shader_cache_entry_init(Lru *lru, LruNode *node, const void *state)
     memcpy(&binding->state, state, sizeof(ShaderState));
     binding->initialized = false;
     binding->cached = false;
+    binding->cache_key = NULL;
     binding->program = NULL;
     binding->save_thread = NULL;
 }
@@ -520,8 +684,10 @@ static void shader_cache_entry_post_evict(Lru *lru, LruNode *node)
     if (binding->program) {
         g_free(binding->program);
     }
+    g_free(binding->cache_key);
 
     binding->cached = false;
+    binding->cache_key = NULL;
     binding->save_thread = NULL;
     binding->program = NULL;
     memset(&binding->state, 0, sizeof(ShaderState));
@@ -559,6 +725,7 @@ void pgraph_gl_init_shaders(PGRAPHState *pg)
     r->shader_cache.compare_nodes = shader_cache_entry_compare;
     r->shader_cache.post_node_evict = shader_cache_entry_post_evict;
 
+    r->loaded_shader_cache_key = g_strdup("global");
     qemu_thread_create(&r->shader_disk_thread, "pgraph.renderer_state->shader_cache",
                        shader_reload_lru_from_disk, pg, QEMU_THREAD_JOINABLE);
 
@@ -590,79 +757,41 @@ void pgraph_gl_finalize_shaders(PGRAPHState *pg)
     g_free(r->shader_module_cache_entries);
     r->shader_module_cache_entries = NULL;
 
+    g_free(r->loaded_shader_cache_key);
+    r->loaded_shader_cache_key = NULL;
     qemu_mutex_destroy(&r->shader_cache_lock);
 }
 
 static void *shader_write_to_disk(void *arg)
 {
     ShaderBinding *binding = (ShaderBinding*) arg;
-
-    char *shader_bin = shader_get_bin_directory(binding->node.hash);
-    char *shader_path = shader_get_binary_path(shader_bin, binding->node.hash);
-
-    static uint64_t gl_vendor_len;
-    if (gl_vendor_len == 0) {
-        gl_vendor_len = (uint64_t) (strlen(shader_gl_vendor) + 1);
+    const char *cache_key = binding->cache_key ? binding->cache_key : "global";
+    if (!shader_write_cached_binary_file(cache_key, binding->node.hash,
+                                         binding->program_format,
+                                         &binding->state, binding->program,
+                                         binding->program_size)) {
+        fprintf(stderr, "nv2a: Failed to write shader binary cache for %s\n",
+                cache_key);
     }
-
-    static uint64_t xemu_version_len = 0;
-    if (xemu_version_len == 0) {
-        xemu_version_len = (uint64_t) (strlen(xemu_version) + 1);
-    }
-
-    qemu_mkdir(shader_bin);
-    g_free(shader_bin);
-
-    FILE *shader_file = qemu_fopen(shader_path, "wb");
-    if (!shader_file) {
-        goto error;
-    }
-
-    size_t written;
-    #define WRITE_OR_ERR(data, data_size) \
-        do { \
-            written = fwrite(data, data_size, 1, shader_file); \
-            if (written != 1) { \
-                fclose(shader_file); \
-                goto error; \
-            } \
-        } while (0)
-
-    WRITE_OR_ERR(&xemu_version_len, sizeof(xemu_version_len));
-    WRITE_OR_ERR(xemu_version, xemu_version_len);
-
-    WRITE_OR_ERR(&gl_vendor_len, sizeof(gl_vendor_len));
-    WRITE_OR_ERR(shader_gl_vendor, gl_vendor_len);
-
-    WRITE_OR_ERR(&binding->program_format, sizeof(binding->program_format));
-    WRITE_OR_ERR(&binding->state, sizeof(binding->state));
-
-    WRITE_OR_ERR(&binding->program_size, sizeof(binding->program_size));
-    WRITE_OR_ERR(binding->program, binding->program_size);
-
-    #undef WRITE_OR_ERR
-
-    fclose(shader_file);
-
-    g_free(shader_path);
-    g_free(binding->program);
-    binding->program = NULL;
-
-    return NULL;
-
-error:
-    fprintf(stderr, "nv2a: Failed to write shader binary file to %s\n", shader_path);
-    qemu_unlink(shader_path);
-    g_free(shader_path);
     g_free(binding->program);
     binding->program = NULL;
     return NULL;
 }
 
-void pgraph_gl_shader_cache_to_disk(ShaderBinding *binding)
+void pgraph_gl_shader_cache_to_disk(PGRAPHState *pg, ShaderBinding *binding)
 {
-    if (binding->cached) {
+    PGRAPHGLState *r = pg->gl_renderer_state;
+    const char *cache_key = r->loaded_shader_cache_key ?
+                            r->loaded_shader_cache_key : "global";
+
+    if (binding->cached && g_strcmp0(binding->cache_key, cache_key) == 0) {
         return;
+    }
+
+    if (binding->save_thread) {
+        qemu_thread_join(binding->save_thread);
+        g_free(binding->save_thread);
+        binding->save_thread = NULL;
     }
 
     GLint program_size;
@@ -686,6 +815,7 @@ void pgraph_gl_shader_cache_to_disk(ShaderBinding *binding)
 
     binding->program_size = program_size_copied;
     binding->cached = true;
+    shader_binding_set_cache_key(binding, cache_key);
 
     char name[24];
     snprintf(name, sizeof(name), "scache-%llx", (unsigned long long) binding->node.hash);
@@ -694,7 +824,8 @@ void pgraph_gl_shader_cache_to_disk(ShaderBinding *binding)
 }
 
 static void apply_uniform_updates(const UniformInfo *info, int *locs,
-                                  void *values, size_t count)
+                                  void *values, void *prev_values,
+                                  bool force, size_t count)
 {
     for (int i = 0; i < count; i++) {
         if (locs[i] == -1) {
@@ -702,6 +833,15 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
         }
 
         void *value = (char*)values + info[i].val_offs;
+
+        size_t byte_size = info[i].size * info[i].count;
+        void *prev = prev_values ? (char*)prev_values + info[i].val_offs : NULL;
+
+        if (!force && prev) {
+            if (memcmp(value, prev, byte_size) == 0) {
+                continue;
+            }
+        }
 
         switch (info[i].type) {
         case UniformElementType_uint:
@@ -734,24 +874,31 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
         default:
             g_assert_not_reached();
         }
+
+        if (prev) {
+            memcpy(prev, value, byte_size);
+        }
     }
 
     assert(glGetError() == GL_NO_ERROR);
 }
 
-// FIXME: Dirty tracking
-// FIXME: Consider UBO to align with VK renderer
-static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding)
+static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding,
+                                   bool binding_changed)
 {
     PGRAPHGLState *r = pg->gl_renderer_state;
+    bool force = binding_changed || !r->uniform_cache_valid;
 
     VshUniformValues vsh_values;
+    memset(&vsh_values, 0, sizeof(vsh_values));
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
                                   binding->uniform_locs.vsh, &vsh_values);
     apply_uniform_updates(VshUniformInfo, binding->uniform_locs.vsh,
-                          &vsh_values, VshUniform__COUNT);
+                          &vsh_values, &r->prev_vsh_values,
+                          force, VshUniform__COUNT);
 
     PshUniformValues psh_values;
+    memset(&psh_values, 0, sizeof(psh_values));
     pgraph_glsl_set_psh_uniform_values(pg, binding->uniform_locs.psh, &psh_values);
 
     for (int i = 0; i < 4; i++) {
@@ -761,7 +908,10 @@ static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding)
         }
     }
     apply_uniform_updates(PshUniformInfo, binding->uniform_locs.psh,
-                          &psh_values, PshUniform__COUNT);
+                          &psh_values, &r->prev_psh_values,
+                          force, PshUniform__COUNT);
+
+    r->uniform_cache_valid = true;
 }
 
 void pgraph_gl_bind_shaders(PGRAPHState *pg)
@@ -793,7 +943,7 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_GEN);
         generate_shaders(r, binding);
         if (g_config.perf.cache_shaders) {
-            pgraph_gl_shader_cache_to_disk(binding);
+            pgraph_gl_shader_cache_to_disk(pg, binding);
         }
     }
     assert(binding->initialized);
@@ -813,7 +963,7 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
 update_uniforms:
     assert(r->shader_binding);
     assert(r->shader_binding->initialized);
-    update_shader_uniforms(pg, r->shader_binding);
+    update_shader_uniforms(pg, r->shader_binding, binding_changed);
 }
 
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src)

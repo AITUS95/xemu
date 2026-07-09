@@ -159,6 +159,7 @@ void pgraph_gl_draw_begin(NV2AState *d)
 
     pgraph_gl_bind_textures(d);
     pgraph_gl_bind_shaders(pg);
+    pgraph_clear_dirty_reg_map(pg);
 
     glColorMask(mask_red, mask_green, mask_blue, mask_alpha);
     glDepthMask(!!(control_0 & NV_PGRAPH_CONTROL_0_ZWRITEENABLE));
@@ -386,7 +387,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
     if (!(r->color_binding || r->zeta_binding)) {
         return;
     }
-    assert(r->shader_binding);
+    if (!r->shader_binding) {
+        return;
+    }
 
     if (pg->draw_arrays_length) {
         NV2A_GL_DPRINTF(false, "Draw Arrays");
@@ -395,10 +398,9 @@ void pgraph_gl_flush_draw(NV2AState *d)
         assert(pg->inline_buffer_length == 0);
         assert(pg->inline_array_length == 0);
 
-        pgraph_gl_bind_vertex_attributes(d, pg->draw_arrays_min_start,
-                                      pg->draw_arrays_max_count - 1,
-                                      false, 0,
-                                      pg->draw_arrays_max_count - 1);
+        pgraph_gl_bind_vertex_attributes(
+            d, pg->draw_arrays_min_start, pg->draw_arrays_max_count - 1,
+            false, 0, pg->draw_arrays_max_count - 1);
         glMultiDrawArrays(r->shader_binding->gl_primitive_mode,
                           pg->draw_arrays_start,
                           pg->draw_arrays_count,
@@ -417,8 +419,8 @@ void pgraph_gl_flush_draw(NV2AState *d)
         }
 
         pgraph_gl_bind_vertex_attributes(
-                d, min_element, max_element, false, 0,
-                pg->inline_elements[pg->inline_elements_length - 1]);
+            d, min_element, max_element,
+            false, 0, pg->inline_elements[pg->inline_elements_length - 1]);
 
         VertexKey k;
         memset(&k, 0, sizeof(VertexKey));
@@ -462,14 +464,16 @@ void pgraph_gl_flush_draw(NV2AState *d)
                 glBufferData(GL_ARRAY_BUFFER,
                              pg->inline_buffer_length * sizeof(float) * 4,
                              attr->inline_buffer, GL_STREAM_DRAW);
-                glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 0, 0);
-                glEnableVertexAttribArray(i);
+                pgraph_gl_set_vertex_attrib_pointer(
+                    r, i, r->gl_inline_buffer[i], false, 4, GL_FLOAT,
+                    GL_FALSE, 0, 0);
+                pgraph_gl_set_vertex_attrib_array(r, i, true);
                 attr->inline_buffer_populated = false;
                 memcpy(attr->inline_value,
                        attr->inline_buffer + (pg->inline_buffer_length - 1) * 4,
                        sizeof(attr->inline_value));
             } else {
-                glDisableVertexAttribArray(i);
+                pgraph_gl_set_vertex_attrib_array(r, i, false);
                 glVertexAttrib4fv(i, attr->inline_value);
             }
         }

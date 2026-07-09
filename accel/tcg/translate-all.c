@@ -244,7 +244,7 @@ static int setjmp_gen_code(CPUArchState *env, TranslationBlock *tb,
                            vaddr pc, void *host_pc,
                            int *max_insns, int64_t *ti)
 {
-    int ret = sigsetjmp(tcg_ctx->jmp_trans, 0);
+    int ret = tcg_trans_setjmp(tcg_ctx->jmp_trans);
     if (unlikely(ret != 0)) {
         return ret;
     }

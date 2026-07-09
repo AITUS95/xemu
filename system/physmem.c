@@ -309,15 +309,43 @@ void address_space_dispatch_compact(AddressSpaceDispatch *d)
     }
 }
 
-static inline bool section_covers_addr(const MemoryRegionSection *section,
-                                       hwaddr addr)
+static inline __attribute__((always_inline))
+bool section_covers_addr(const MemoryRegionSection *section, hwaddr addr)
 {
+    Int128 size = section->size;
+    uint64_t size_lo = int128_getlo(size);
+
     /* Memory topology clips a memory region to [0, 2^64); size.hi > 0 means
      * the section must cover the entire address space.
      */
-    return int128_gethi(section->size) ||
-           range_covers_byte(section->offset_within_address_space,
-                             int128_getlo(section->size), addr);
+    return unlikely(int128_gethi(size)) ||
+           addr - section->offset_within_address_space < size_lo;
+}
+
+static inline __attribute__((always_inline))
+hwaddr section_addr_within_region(const MemoryRegionSection *section, hwaddr addr)
+{
+    return addr - section->offset_within_address_space;
+}
+
+static inline __attribute__((always_inline))
+void section_clamp_ram_plen(const MemoryRegionSection *section,
+                            hwaddr section_addr,
+                            hwaddr *plen)
+{
+    Int128 size = section->size;
+
+    if (likely(!int128_gethi(size))) {
+        hwaddr section_len = int128_getlo(size) - section_addr;
+
+        if (*plen > section_len) {
+            *plen = section_len;
+        }
+    } else {
+        Int128 diff = int128_sub(size, int128_make64(section_addr));
+
+        *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
+    }
 }
 
 static MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr addr)
@@ -344,19 +372,21 @@ static MemoryRegionSection *phys_page_find(AddressSpaceDispatch *d, hwaddr addr)
 }
 
 /* Called from RCU critical section */
-static MemoryRegionSection *address_space_lookup_region(AddressSpaceDispatch *d,
-                                                        hwaddr addr,
-                                                        bool resolve_subpage)
+static inline __attribute__((always_inline))
+MemoryRegionSection *address_space_lookup_region(AddressSpaceDispatch *d,
+                                                 hwaddr addr,
+                                                 bool resolve_subpage)
 {
     MemoryRegionSection *section = qatomic_read(&d->mru_section);
+    MemoryRegionSection *unassigned = &d->map.sections[PHYS_SECTION_UNASSIGNED];
     subpage_t *subpage;
 
-    if (!section || section == &d->map.sections[PHYS_SECTION_UNASSIGNED] ||
-        !section_covers_addr(section, addr)) {
+    if (unlikely(!section || section == unassigned ||
+                 !section_covers_addr(section, addr))) {
         section = phys_page_find(d, addr);
         qatomic_set(&d->mru_section, section);
     }
-    if (resolve_subpage && section->mr->subpage) {
+    if (resolve_subpage && unlikely(section->mr->subpage)) {
         subpage = container_of(section->mr, subpage_t, iomem);
         section = &d->map.sections[subpage->sub_section[SUBPAGE_IDX(addr)]];
     }
@@ -369,17 +399,13 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
                                  hwaddr *plen, bool resolve_subpage)
 {
     MemoryRegionSection *section;
-    MemoryRegion *mr;
-    Int128 diff;
+    hwaddr section_addr;
 
     section = address_space_lookup_region(d, addr, resolve_subpage);
-    /* Compute offset within MemoryRegionSection */
-    addr -= section->offset_within_address_space;
+    section_addr = section_addr_within_region(section, addr);
 
     /* Compute offset within MemoryRegion */
-    *xlat = addr + section->offset_within_region;
-
-    mr = section->mr;
+    *xlat = section_addr + section->offset_within_region;
 
     /* MMIO registers can be expected to perform full-width accesses based only
      * on their address, without considering adjacent registers that could
@@ -392,9 +418,8 @@ address_space_translate_internal(AddressSpaceDispatch *d, hwaddr addr, hwaddr *x
      * everything works fine.  If the incoming length is large, however,
      * the caller really has to do the clamping through memory_access_size.
      */
-    if (memory_region_is_ram(mr)) {
-        diff = int128_sub(section->size, int128_make64(addr));
-        *plen = int128_get64(int128_min(diff, int128_make64(*plen)));
+    if (likely(memory_region_is_ram(section->mr))) {
+        section_clamp_ram_plen(section, section_addr, plen);
     }
     return section;
 }
@@ -492,15 +517,15 @@ unassigned:
  *
  * This function is called from RCU critical section
  */
-static MemoryRegionSection flatview_do_translate(FlatView *fv,
-                                                 hwaddr addr,
-                                                 hwaddr *xlat,
-                                                 hwaddr *plen_out,
-                                                 hwaddr *page_mask_out,
-                                                 bool is_write,
-                                                 bool is_mmio,
-                                                 AddressSpace **target_as,
-                                                 MemTxAttrs attrs)
+static MemoryRegionSection address_space_do_translate(AddressSpaceDispatch *d,
+                                                      hwaddr addr,
+                                                      hwaddr *xlat,
+                                                      hwaddr *plen_out,
+                                                      hwaddr *page_mask_out,
+                                                      bool is_write,
+                                                      bool is_mmio,
+                                                      AddressSpace **target_as,
+                                                      MemTxAttrs attrs)
 {
     MemoryRegionSection *section;
     IOMMUMemoryRegion *iommu_mr;
@@ -510,9 +535,8 @@ static MemoryRegionSection flatview_do_translate(FlatView *fv,
         plen_out = &plen;
     }
 
-    section = address_space_translate_internal(
-            flatview_to_dispatch(fv), addr, xlat,
-            plen_out, is_mmio);
+    section = address_space_translate_internal(d, addr, xlat, plen_out,
+                                              is_mmio);
 
     iommu_mr = memory_region_get_iommu(section->mr);
     if (unlikely(iommu_mr)) {
@@ -529,6 +553,21 @@ static MemoryRegionSection flatview_do_translate(FlatView *fv,
     return *section;
 }
 
+static MemoryRegionSection flatview_do_translate(FlatView *fv,
+                                                 hwaddr addr,
+                                                 hwaddr *xlat,
+                                                 hwaddr *plen_out,
+                                                 hwaddr *page_mask_out,
+                                                 bool is_write,
+                                                 bool is_mmio,
+                                                 AddressSpace **target_as,
+                                                 MemTxAttrs attrs)
+{
+    return address_space_do_translate(flatview_to_dispatch(fv), addr, xlat,
+                                      plen_out, page_mask_out, is_write,
+                                      is_mmio, target_as, attrs);
+}
+
 /* Called from RCU critical section */
 IOMMUTLBEntry address_space_get_iotlb_entry(AddressSpace *as, hwaddr addr,
                                             bool is_write, MemTxAttrs attrs)
@@ -540,9 +579,9 @@ IOMMUTLBEntry address_space_get_iotlb_entry(AddressSpace *as, hwaddr addr,
      * This can never be MMIO, and we don't really care about plen,
      * but page mask.
      */
-    section = flatview_do_translate(address_space_to_flatview(as), addr, &xlat,
-                                    NULL, &page_mask, is_write, false, &as,
-                                    attrs);
+    section = address_space_do_translate(address_space_to_dispatch(as), addr,
+                                         &xlat, NULL, &page_mask, is_write,
+                                         false, &as, attrs);
 
     /* Illegal translation */
     if (section.mr == &io_mem_unassigned) {
@@ -728,7 +767,7 @@ address_space_translate_for_iotlb(CPUState *cpu, int asidx, hwaddr orig_addr,
             goto translate_fail;
         }
 
-        d = flatview_to_dispatch(address_space_to_flatview(iotlb.target_as));
+        d = address_space_to_dispatch(iotlb.target_as);
     }
 
     assert(!memory_region_is_iommu(section->mr));
@@ -984,6 +1023,13 @@ found:
     return block;
 }
 
+static inline __attribute__((always_inline))
+bool ram_block_covers_host(const RAMBlock *block, const uint8_t *host)
+{
+    return block && block->host &&
+           (uintptr_t)host - (uintptr_t)block->host < block->max_length;
+}
+
 void tlb_reset_dirty_range_all(ram_addr_t start, ram_addr_t length)
 {
     CPUState *cpu;
@@ -1011,8 +1057,8 @@ void physical_memory_dirty_bits_cleared(ram_addr_t start, ram_addr_t length)
     }
 }
 
-static bool physical_memory_get_dirty(ram_addr_t start, ram_addr_t length,
-                                      unsigned client)
+bool physical_memory_get_dirty(ram_addr_t start, ram_addr_t length,
+                               unsigned client)
 {
     DirtyMemoryBlocks *blocks;
     unsigned long end, page;
@@ -2406,6 +2452,7 @@ static void ram_block_add(RAMBlock *new_block, Error **errp)
         QLIST_INSERT_HEAD_RCU(&ram_list.blocks, new_block, next);
     }
     ram_list.mru_block = NULL;
+    ram_list.host_mru_block = NULL;
 
     /* Write list before version */
     smp_wmb();
@@ -2754,6 +2801,7 @@ void qemu_ram_free(RAMBlock *block)
     cpr_delete_fd(name, 0);
     QLIST_REMOVE_RCU(block, next);
     ram_list.mru_block = NULL;
+    ram_list.host_mru_block = NULL;
     /* Write list before version */
     smp_wmb();
     ram_list.version++;
@@ -2856,9 +2904,10 @@ void qemu_ram_remap(ram_addr_t addr)
  *
  * Called within RCU critical section.
  */
-static void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
-                                 hwaddr *size, bool lock,
-                                 bool is_write)
+static inline __attribute__((always_inline))
+void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
+                          hwaddr *size, bool lock,
+                          bool is_write)
 {
     hwaddr len = 0;
 
@@ -2875,22 +2924,22 @@ static void *qemu_ram_ptr_length(RAMBlock *block, ram_addr_t addr,
         len = *size;
     }
 
-    if (xen_enabled() && block->host == NULL) {
-        /* We need to check if the requested address is in the RAM
-         * because we don't want to map the entire memory in QEMU.
-         * In that case just map the requested area.
-         */
-        if (xen_mr_is_memory(block->mr)) {
-            return xen_map_cache(block->mr, block->offset + addr,
-                                 len, block->offset,
-                                 lock, lock, is_write);
-        }
-
-        block->host = xen_map_cache(block->mr, block->offset,
-                                    block->max_length,
-                                    block->offset,
-                                    1, lock, is_write);
+    if (likely(!xen_enabled() || block->host != NULL)) {
+        assert(offset_in_ramblock(block, addr));
+        return (uint8_t *)block->host + addr;
     }
+
+    /* Xen foreign mappings are the uncommon case. */
+    if (xen_mr_is_memory(block->mr)) {
+        return xen_map_cache(block->mr, block->offset + addr,
+                             len, block->offset,
+                             lock, lock, is_write);
+    }
+
+    block->host = xen_map_cache(block->mr, block->offset,
+                                block->max_length,
+                                block->offset,
+                                1, lock, is_write);
 
     return ramblock_ptr(block, addr);
 }
@@ -2940,17 +2989,13 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
     }
 
     RCU_READ_LOCK_GUARD();
-    block = qatomic_rcu_read(&ram_list.mru_block);
-    if (block && block->host && host - block->host < block->max_length) {
+    block = qatomic_rcu_read(&ram_list.host_mru_block);
+    if (ram_block_covers_host(block, host)) {
         goto found;
     }
 
     RAMBLOCK_FOREACH(block) {
-        /* This case append when the block is not mapped. */
-        if (block->host == NULL) {
-            continue;
-        }
-        if (host - block->host < block->max_length) {
+        if (ram_block_covers_host(block, host)) {
             goto found;
         }
     }
@@ -2958,7 +3003,8 @@ RAMBlock *qemu_ram_block_from_host(void *ptr, bool round_offset,
     return NULL;
 
 found:
-    *offset = (host - block->host);
+    ram_list.host_mru_block = block;
+    *offset = (uintptr_t)host - (uintptr_t)block->host;
     if (round_offset) {
         *offset &= TARGET_PAGE_MASK;
     }
@@ -3637,11 +3683,14 @@ MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
                                     MemTxAttrs attrs,
                                     const void *buf, hwaddr len)
 {
+    FlatView *fv;
+
     RCU_READ_LOCK_GUARD();
+    fv = address_space_to_flatview(as);
     while (len > 0) {
         hwaddr addr1, l = len;
-        MemoryRegion *mr = address_space_translate(as, addr, &addr1, &l,
-                                                   true, attrs);
+        MemoryRegion *mr = flatview_translate(fv, addr, &addr1, &l,
+                                              true, attrs);
 
         if (!memory_region_supports_direct_access(mr)) {
             l = memory_access_size(mr, l, addr1);
@@ -3660,6 +3709,8 @@ MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
 
 void address_space_flush_icache_range(AddressSpace *as, hwaddr addr, hwaddr len)
 {
+    FlatView *fv;
+
     /*
      * This function should do the same thing as an icache flush that was
      * triggered from within the guest. For TCG we are always cache coherent,
@@ -3671,10 +3722,11 @@ void address_space_flush_icache_range(AddressSpace *as, hwaddr addr, hwaddr len)
     }
 
     RCU_READ_LOCK_GUARD();
+    fv = address_space_to_flatview(as);
     while (len > 0) {
         hwaddr addr1, l = len;
-        MemoryRegion *mr = address_space_translate(as, addr, &addr1, &l, true,
-                                                   MEMTXATTRS_UNSPECIFIED);
+        MemoryRegion *mr = flatview_translate(fv, addr, &addr1, &l, true,
+                                              MEMTXATTRS_UNSPECIFIED);
 
         if (!memory_region_supports_direct_access(mr)) {
             l = memory_access_size(mr, l, addr1);
@@ -3964,12 +4016,35 @@ void cpu_physical_memory_unmap(void *buffer, hwaddr len,
     return address_space_unmap(&address_space_memory, buffer, len, is_write, access_len);
 }
 
+static inline __attribute__((always_inline))
+MemoryRegion *address_space_translate_rcu(AddressSpace *as, hwaddr addr,
+                                          hwaddr *xlat, hwaddr *plen,
+                                          bool is_write, MemTxAttrs attrs)
+{
+    MemoryRegionSection section;
+    AddressSpace *target_as = NULL;
+    MemoryRegion *mr;
+
+    section = address_space_do_translate(address_space_to_dispatch(as), addr,
+                                         xlat, plen, NULL, is_write, true,
+                                         &target_as, attrs);
+    mr = section.mr;
+
+    if (xen_enabled() && memory_access_is_direct(mr, is_write, attrs)) {
+        hwaddr page = ((addr & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE) - addr;
+        *plen = MIN(page, *plen);
+    }
+
+    return mr;
+}
+
 #define ARG1_DECL                AddressSpace *as
 #define ARG1                     as
 #define SUFFIX
-#define TRANSLATE(...)           address_space_translate(as, __VA_ARGS__)
-#define RCU_READ_LOCK(...)       rcu_read_lock()
-#define RCU_READ_UNLOCK(...)     rcu_read_unlock()
+#define TRANSLATE(...)           address_space_translate_rcu(as, __VA_ARGS__)
+#define RCU_READ_LOCK(...)                                               \
+    struct rcu_reader_data *qemu_rcu_reader_local = rcu_read_lock_ptr()
+#define RCU_READ_UNLOCK(...)     rcu_read_unlock_ptr(qemu_rcu_reader_local)
 #include "memory_ldst.c.inc"
 
 int64_t address_space_cache_init(MemoryRegionCache *cache,

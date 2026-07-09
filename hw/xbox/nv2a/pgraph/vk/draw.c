@@ -19,8 +19,217 @@
 
 #include "qemu/osdep.h"
 #include "qemu/fast-hash.h"
+#include "xemu-version.h"
+#include "ui/xemu-settings.h"
 #include "renderer.h"
 #include <math.h>
+
+#define NV2A_VK_PIPELINE_CACHE_MAGIC 0x58565043u
+#define NV2A_VK_PIPELINE_CACHE_VERSION 1u
+
+typedef struct NV2AVkPipelineCacheHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t vendor_id;
+    uint32_t device_id;
+    uint32_t driver_version;
+    uint8_t pipeline_cache_uuid[VK_UUID_SIZE];
+    uint64_t xemu_version_len;
+} NV2AVkPipelineCacheHeader;
+
+static PGRAPHVkState *g_vk_pipeline_cache_atexit_state;
+static bool g_vk_pipeline_cache_atexit_registered;
+
+static char *get_vk_cache_dir(void)
+{
+    return g_strdup_printf("%svulkan", xemu_settings_get_base_path());
+}
+
+static char *get_vk_pipeline_cache_path(void)
+{
+    return g_strdup_printf("%s/vulkan/pipeline_cache.bin",
+                           xemu_settings_get_base_path());
+}
+
+static void invalidate_vk_pipeline_cache_file(void)
+{
+    char *path = get_vk_pipeline_cache_path();
+
+    qemu_unlink(path);
+    g_free(path);
+}
+
+static bool load_vk_pipeline_cache_blob(PGRAPHVkState *r, void **data,
+                                        size_t *size)
+{
+    FILE *cache_file;
+    NV2AVkPipelineCacheHeader header;
+    uint64_t blob_size;
+    char *path = get_vk_pipeline_cache_path();
+    char *cached_xemu_version = NULL;
+    size_t nread;
+    bool ok = false;
+
+    *data = NULL;
+    *size = 0;
+
+    cache_file = qemu_fopen(path, "rb");
+    if (!cache_file) {
+        goto out;
+    }
+
+#define READ_OR_FAIL(ptr, len)                     \
+    do {                                           \
+        nread = fread((ptr), (len), 1, cache_file); \
+        if (nread != 1) {                          \
+            goto invalidate;                       \
+        }                                          \
+    } while (0)
+
+    READ_OR_FAIL(&header, sizeof(header));
+    if (header.magic != NV2A_VK_PIPELINE_CACHE_MAGIC ||
+        header.version != NV2A_VK_PIPELINE_CACHE_VERSION ||
+        header.vendor_id != r->device_props.vendorID ||
+        header.device_id != r->device_props.deviceID ||
+        header.driver_version != r->device_props.driverVersion ||
+        memcmp(header.pipeline_cache_uuid, r->device_props.pipelineCacheUUID,
+               VK_UUID_SIZE) != 0 ||
+        header.xemu_version_len == 0 ||
+        header.xemu_version_len > 4096) {
+        goto invalidate;
+    }
+
+    cached_xemu_version = g_malloc(header.xemu_version_len);
+    READ_OR_FAIL(cached_xemu_version, header.xemu_version_len);
+    if (strcmp(cached_xemu_version, xemu_version) != 0) {
+        goto invalidate;
+    }
+
+    READ_OR_FAIL(&blob_size, sizeof(blob_size));
+    if (blob_size == 0 || blob_size > SIZE_MAX) {
+        goto invalidate;
+    }
+
+    *data = g_malloc(blob_size);
+    READ_OR_FAIL(*data, blob_size);
+    *size = blob_size;
+    ok = true;
+    goto out_close;
+
+invalidate:
+    invalidate_vk_pipeline_cache_file();
+    g_free(*data);
+    *data = NULL;
+    *size = 0;
+
+out_close:
+    fclose(cache_file);
+#undef READ_OR_FAIL
+out:
+    g_free(cached_xemu_version);
+    g_free(path);
+    return ok;
+}
+
+static bool save_vk_pipeline_cache(PGRAPHVkState *r)
+{
+    NV2AVkPipelineCacheHeader header = {
+        .magic = NV2A_VK_PIPELINE_CACHE_MAGIC,
+        .version = NV2A_VK_PIPELINE_CACHE_VERSION,
+        .vendor_id = r->device_props.vendorID,
+        .device_id = r->device_props.deviceID,
+        .driver_version = r->device_props.driverVersion,
+        .xemu_version_len = strlen(xemu_version) + 1,
+    };
+    char *cache_dir = get_vk_cache_dir();
+    char *cache_path = get_vk_pipeline_cache_path();
+    FILE *cache_file = NULL;
+    void *data = NULL;
+    size_t data_size = 0;
+    bool ok = false;
+
+    memcpy(header.pipeline_cache_uuid, r->device_props.pipelineCacheUUID,
+           VK_UUID_SIZE);
+
+    if (g_mkdir_with_parents(cache_dir, 0700) < 0) {
+        goto out;
+    }
+
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &data_size,
+                               NULL) != VK_SUCCESS ||
+        data_size == 0) {
+        goto out;
+    }
+
+    data = g_malloc(data_size);
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &data_size,
+                               data) != VK_SUCCESS) {
+        goto out;
+    }
+
+    cache_file = qemu_fopen(cache_path, "wb");
+    if (!cache_file) {
+        goto out;
+    }
+
+#define WRITE_OR_FAIL(ptr, len)                        \
+    do {                                               \
+        if (fwrite((ptr), (len), 1, cache_file) != 1) { \
+            goto out;                                  \
+        }                                              \
+    } while (0)
+
+    WRITE_OR_FAIL(&header, sizeof(header));
+    WRITE_OR_FAIL(xemu_version, header.xemu_version_len);
+    {
+        uint64_t blob_size = data_size;
+        WRITE_OR_FAIL(&blob_size, sizeof(blob_size));
+    }
+    WRITE_OR_FAIL(data, data_size);
+#undef WRITE_OR_FAIL
+
+    ok = true;
+
+out:
+    if (cache_file) {
+        fclose(cache_file);
+    }
+    if (!ok) {
+        qemu_unlink(cache_path);
+    }
+    g_free(data);
+    g_free(cache_path);
+    g_free(cache_dir);
+    return ok;
+}
+
+static void save_vk_pipeline_cache_atexit(void)
+{
+    PGRAPHVkState *r = g_vk_pipeline_cache_atexit_state;
+
+    if (!r || r->device == VK_NULL_HANDLE ||
+        r->vk_pipeline_cache == VK_NULL_HANDLE) {
+        return;
+    }
+
+    save_vk_pipeline_cache(r);
+}
+
+static void register_vk_pipeline_cache_atexit(PGRAPHVkState *r)
+{
+    /*
+     * Closing the host UI can terminate the process before the NV2A device
+     * teardown reaches pgraph_vk_finalize_pipelines(). Keep an atexit
+     * fallback so the pipeline cache is saved while the Vulkan device is
+     * still alive.
+     */
+    g_vk_pipeline_cache_atexit_state = r;
+
+    if (!g_vk_pipeline_cache_atexit_registered) {
+        atexit(save_vk_pipeline_cache_atexit);
+        g_vk_pipeline_cache_atexit_registered = true;
+    }
+}
 
 void pgraph_vk_draw_begin(NV2AState *d)
 {
@@ -124,6 +333,8 @@ static bool pipeline_cache_entry_compare(Lru *lru, LruNode *node,
 static void init_pipeline_cache(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    void *initial_data = NULL;
+    size_t initial_data_size = 0;
 
     VkPipelineCacheCreateInfo cache_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
@@ -132,8 +343,24 @@ static void init_pipeline_cache(PGRAPHState *pg)
         .pInitialData = NULL,
         .pNext = NULL,
     };
-    VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
-                                   &r->vk_pipeline_cache));
+    if (load_vk_pipeline_cache_blob(r, &initial_data, &initial_data_size)) {
+        cache_info.initialDataSize = initial_data_size;
+        cache_info.pInitialData = initial_data;
+    }
+
+    VkResult res =
+        vkCreatePipelineCache(r->device, &cache_info, NULL, &r->vk_pipeline_cache);
+    if (res != VK_SUCCESS && initial_data) {
+        invalidate_vk_pipeline_cache_file();
+        cache_info.initialDataSize = 0;
+        cache_info.pInitialData = NULL;
+        VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                       &r->vk_pipeline_cache));
+    } else {
+        VK_CHECK(res);
+    }
+    g_free(initial_data);
+    register_vk_pipeline_cache_atexit(r);
 
     const size_t pipeline_cache_size = 2048;
     lru_init(&r->pipeline_cache);
@@ -157,7 +384,13 @@ static void finalize_pipeline_cache(PGRAPHState *pg)
     g_free(r->pipeline_cache_entries);
     r->pipeline_cache_entries = NULL;
 
+    save_vk_pipeline_cache(r);
     vkDestroyPipelineCache(r->device, r->vk_pipeline_cache, NULL);
+    r->vk_pipeline_cache = VK_NULL_HANDLE;
+
+    if (g_vk_pipeline_cache_atexit_state == r) {
+        g_vk_pipeline_cache_atexit_state = NULL;
+    }
 }
 
 static char const *const quad_glsl =
@@ -217,12 +450,6 @@ void pgraph_vk_init_pipelines(PGRAPHState *pg)
     init_clear_shaders(pg);
     init_render_passes(r);
 
-    VkSemaphoreCreateInfo semaphore_info = {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
-    };
-    VK_CHECK(vkCreateSemaphore(r->device, &semaphore_info, NULL,
-                               &r->command_buffer_semaphore));
-
     VkFenceCreateInfo fence_info = {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
     };
@@ -239,7 +466,6 @@ void pgraph_vk_finalize_pipelines(PGRAPHState *pg)
     finalize_render_passes(r);
 
     vkDestroyFence(r->device, r->command_buffer_fence, NULL);
-    vkDestroySemaphore(r->device, r->command_buffer_semaphore, NULL);
 }
 
 static void init_render_pass_state(PGRAPHState *pg, RenderPassState *state)
@@ -634,9 +860,8 @@ static bool check_pipeline_dirty(PGRAPHState *pg)
     }
 
     const unsigned int regs[] = {
-        NV_PGRAPH_BLEND,       NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_0,
-        NV_PGRAPH_CONTROL_1,   NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,
-        NV_PGRAPH_SETUPRASTER, NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
+        NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0, NV_PGRAPH_CONTROL_1,
+        NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3, NV_PGRAPH_SETUPRASTER,
     };
 
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
@@ -676,17 +901,27 @@ static void init_pipeline_key(PGRAPHState *pg, PipelineKey *key)
            sizeof(key->attribute_descriptions[0]) *
                r->num_active_vertex_attribute_descriptions);
 
-    // FIXME: Register masking
-    // FIXME: Use more dynamic state updates
+    /*
+     * Blend constants are programmed with vkCmdSetBlendConstants, and polygon
+     * offset values are already sourced through fragment shader uniforms.
+     */
     const int regs[] = {
-        NV_PGRAPH_BLEND,       NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_0,
-        NV_PGRAPH_CONTROL_1,   NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,
-        NV_PGRAPH_SETUPRASTER, NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
+        NV_PGRAPH_BLEND,     NV_PGRAPH_CONTROL_0, NV_PGRAPH_CONTROL_1,
+        NV_PGRAPH_CONTROL_2, NV_PGRAPH_CONTROL_3, NV_PGRAPH_SETUPRASTER,
     };
-    assert(ARRAY_SIZE(regs) == ARRAY_SIZE(key->regs));
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
         key->regs[i] = pgraph_reg_r(pg, regs[i]);
     }
+}
+
+static void set_blend_constants(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    float blend_constants[4];
+
+    pgraph_argb_pack32_to_rgba_float(pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR),
+                                     blend_constants);
+    vkCmdSetBlendConstants(r->command_buffer, blend_constants);
 }
 
 static void create_pipeline(PGRAPHState *pg)
@@ -714,6 +949,19 @@ static void create_pipeline(PGRAPHState *pg)
 
     PipelineKey key;
     init_pipeline_key(pg, &key);
+
+    /*
+     * Redundant state writes can mark pipeline inputs dirty without actually
+     * changing the effective Vulkan pipeline configuration. Reuse the current
+     * binding directly in that case and avoid hashing and LRU lookup.
+     */
+    if (r->pipeline_binding &&
+        !memcmp(&r->pipeline_binding->key, &key, sizeof(key))) {
+        NV2A_VK_DPRINTF("Cache hit (current binding)");
+        NV2A_VK_DGROUP_END();
+        return;
+    }
+
     uint64_t hash = fast_hash((void *)&key, sizeof(key));
 
     LruNode *node = lru_lookup(&r->pipeline_cache, hash, &key);
@@ -1047,11 +1295,19 @@ static void bind_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     assert(r->descriptor_set_index >= 1);
+    assert(r->uniform_buffer_offsets_valid);
+    assert(r->uniform_buffer_offsets[0] <= UINT32_MAX);
+    assert(r->uniform_buffer_offsets[1] <= UINT32_MAX);
+
+    uint32_t dynamic_offsets[] = {
+        r->uniform_buffer_offsets[0],
+        r->uniform_buffer_offsets[1],
+    };
 
     vkCmdBindDescriptorSets(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             r->pipeline_binding->layout, 0, 1,
-                            &r->descriptor_sets[r->descriptor_set_index - 1], 0,
-                            NULL);
+                            &r->descriptor_sets[r->descriptor_set_index - 1],
+                            ARRAY_SIZE(dynamic_offsets), dynamic_offsets);
 }
 
 static void begin_query(PGRAPHVkState *r)
@@ -1118,6 +1374,7 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
         break;
     default:
         assert(0);
+        abort();
         break;
     }
 
@@ -1139,25 +1396,48 @@ static void sync_staging_buffer(PGRAPHState *pg, VkCommandBuffer cmd,
 static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *buffer = &r->storage_buffers[BUFFER_VERTEX_RAM];
+    VkDeviceSize atom_size = MAX((VkDeviceSize)1,
+                                 r->device_props.limits.nonCoherentAtomSize);
+    unsigned long start_page;
 
-    VK_CHECK(vmaFlushAllocation(
-        r->allocator, r->storage_buffers[BUFFER_VERTEX_RAM].allocation, 0,
-        VK_WHOLE_SIZE));
+    start_page = find_next_bit(r->uploaded_bitmap, r->bitmap_size, 0);
+    if (start_page >= r->bitmap_size) {
+        return;
+    }
 
-    VkBufferMemoryBarrier barrier = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .buffer = r->storage_buffers[BUFFER_VERTEX_RAM].buffer,
-        .offset = 0,
-        .size = VK_WHOLE_SIZE,
-    };
+    while (start_page < r->bitmap_size) {
+        unsigned long end_page = find_next_zero_bit(r->uploaded_bitmap,
+                                                    r->bitmap_size,
+                                                    start_page);
+        VkDeviceSize range_offset = (VkDeviceSize)start_page * TARGET_PAGE_SIZE;
+        VkDeviceSize range_end = MIN((VkDeviceSize)end_page * TARGET_PAGE_SIZE,
+                                     buffer->buffer_size);
+        VkDeviceSize flush_offset = QEMU_ALIGN_DOWN(range_offset, atom_size);
+        VkDeviceSize flush_end = MIN(QEMU_ALIGN_UP(range_end, atom_size),
+                                     buffer->buffer_size);
+        VkDeviceSize flush_size = flush_end - flush_offset;
+        VkBufferMemoryBarrier barrier = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = buffer->buffer,
+            .offset = range_offset,
+            .size = range_end - range_offset,
+        };
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
-                         VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
-                         &barrier, 0, NULL);
+        VK_CHECK(vmaFlushAllocation(r->allocator, buffer->allocation,
+                                    flush_offset, flush_size));
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, NULL, 1,
+                             &barrier, 0, NULL);
+
+        start_page = find_next_bit(r->uploaded_bitmap, r->bitmap_size, end_page);
+    }
+
+    bitmap_clear(r->uploaded_bitmap, 0, r->bitmap_size);
 }
 
 static void begin_render_pass(PGRAPHState *pg)
@@ -1233,33 +1513,22 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         sync_staging_buffer(pg, cmd, BUFFER_VERTEX_INLINE_STAGING,
                                 BUFFER_VERTEX_INLINE);
         sync_staging_buffer(pg, cmd, BUFFER_UNIFORM_STAGING, BUFFER_UNIFORM);
-        bitmap_clear(r->uploaded_bitmap, 0, r->bitmap_size);
         flush_memory_buffer(pg, cmd);
         VK_CHECK(vkEndCommandBuffer(r->aux_command_buffer));
         r->in_aux_command_buffer = false;
 
-        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-        VkSubmitInfo submit_infos[] = {
-            {
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &r->aux_command_buffer,
-                .signalSemaphoreCount = 1,
-                .pSignalSemaphores = &r->command_buffer_semaphore,
-            },
-            {
-
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &r->command_buffer,
-                .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &r->command_buffer_semaphore,
-                .pWaitDstStageMask = &wait_stage,
-            }
+        VkCommandBuffer submit_cmds[] = {
+            r->aux_command_buffer,
+            r->command_buffer,
+        };
+        VkSubmitInfo submit_info = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = ARRAY_SIZE(submit_cmds),
+            .pCommandBuffers = submit_cmds,
         };
         nv2a_profile_inc_counter(NV2A_PROF_QUEUE_SUBMIT);
         vkResetFences(r->device, 1, &r->command_buffer_fence);
-        VK_CHECK(vkQueueSubmit(r->queue, ARRAY_SIZE(submit_infos), submit_infos,
+        VK_CHECK(vkQueueSubmit(r->queue, 1, &submit_info,
                                r->command_buffer_fence));
         r->submit_count += 1;
 
@@ -1281,7 +1550,9 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                  VK_TRUE, UINT64_MAX));
 
         r->descriptor_set_index = 0;
+        r->uniform_buffer_offsets_valid = false;
         r->in_command_buffer = false;
+        bitmap_clear(r->vertex_ram_in_use_bitmap, 0, r->bitmap_size);
         destroy_framebuffers(pg);
 
         if (check_budget) {
@@ -1439,6 +1710,7 @@ static void begin_draw(PGRAPHState *pg)
         nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_BIND);
         vkCmdBindPipeline(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           r->pipeline_binding->pipeline);
+        r->pipeline_binding_changed = false;
         r->pipeline_binding->draw_time = pg->draw_time;
 
         unsigned int vp_width = pg->surface_binding_dim.width,
@@ -1483,6 +1755,7 @@ static void begin_draw(PGRAPHState *pg)
     }
 
     if (!pg->clearing) {
+        set_blend_constants(pg);
         bind_descriptor_sets(pg);
         push_vertex_attr_values(pg);
     }
@@ -1632,6 +1905,11 @@ static void sync_vertex_ram_buffer(PGRAPHState *pg)
             pgraph_vk_update_vertex_ram_buffer(pg, addr, d->vram_ptr + addr,
                                                size);
         }
+
+        size_t start_bit = addr / TARGET_PAGE_SIZE;
+        size_t end_bit = TARGET_PAGE_ALIGN(addr + size) / TARGET_PAGE_SIZE;
+        bitmap_set(r->vertex_ram_in_use_bitmap, start_bit,
+                   end_bit - start_bit);
     }
 
     r->num_vertex_ram_buffer_syncs = 0;

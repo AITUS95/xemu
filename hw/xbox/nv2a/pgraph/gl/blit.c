@@ -98,6 +98,7 @@ void pgraph_gl_image_blit(NV2AState *d)
         fprintf(stderr, "Unknown blit surface format: 0x%x\n",
                 context_surfaces->color_format);
         assert(!"Unknown blit surface format");
+        abort();
         break;
     }
 

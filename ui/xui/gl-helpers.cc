@@ -19,11 +19,13 @@
 #include "ui/xemu-widescreen.h"
 #include "gl-helpers.hh"
 #include "common.hh"
+extern "C" {
 #include "data/controller_mask.png.h"
 #include "data/controller_mask_s.png.h"
 #include "data/logo_sdf.png.h"
 #include "data/xemu_64x64.png.h"
 #include "data/xmu_mask.png.h"
+}
 #include "notifications.hh"
 #include "stb_image.h"
 #include <fpng.h>

@@ -48,6 +48,10 @@
 #include "tb-internal.h"
 #include "internal-common.h"
 
+#if defined(XBOX) && !defined(CONFIG_USER_ONLY)
+#define XBOX_TCG_DIRECT_TB_STATE 1
+#endif
+
 /* -icount align implementation. */
 
 typedef struct SyncClocks {
@@ -154,24 +158,26 @@ struct tb_desc {
     TCGTBCPUState s;
     CPUArchState *env;
     tb_page_addr_t page_addr0;
+    tb_page_addr_t page_addr1;
+    bool page_addr1_valid;
 };
 
 static bool tb_lookup_cmp(const void *p, const void *d)
 {
     const TranslationBlock *tb = p;
-    const struct tb_desc *desc = d;
+    struct tb_desc *desc = (struct tb_desc *)d;
+    uint32_t cflags = tb_cflags(tb);
 
-    if ((tb_cflags(tb) & CF_PCREL || tb->pc == desc->s.pc) &&
+    if ((cflags & CF_PCREL || tb->pc == desc->s.pc) &&
         tb_page_addr0(tb) == desc->page_addr0 &&
         tb->cs_base == desc->s.cs_base &&
         tb->flags == desc->s.flags &&
-        (tb_cflags(tb) & ~CF_INVALID) == desc->s.cflags) {
+        (cflags & ~CF_INVALID) == desc->s.cflags) {
         /* check next page if needed */
         tb_page_addr_t tb_phys_page1 = tb_page_addr1(tb);
         if (tb_phys_page1 == -1) {
             return true;
         } else {
-            tb_page_addr_t phys_page1;
             vaddr virt_page1;
 
             /*
@@ -183,9 +189,12 @@ static bool tb_lookup_cmp(const void *p, const void *d)
              * is different for the new TB.  Therefore any exception raised
              * here by the faulting lookup is not premature.
              */
-            virt_page1 = TARGET_PAGE_ALIGN(desc->s.pc);
-            phys_page1 = get_page_addr_code(desc->env, virt_page1);
-            if (tb_phys_page1 == phys_page1) {
+            if (!desc->page_addr1_valid) {
+                virt_page1 = TARGET_PAGE_ALIGN(desc->s.pc);
+                desc->page_addr1 = get_page_addr_code(desc->env, virt_page1);
+                desc->page_addr1_valid = true;
+            }
+            if (tb_phys_page1 == desc->page_addr1) {
                 return true;
             }
         }
@@ -193,7 +202,7 @@ static bool tb_lookup_cmp(const void *p, const void *d)
     return false;
 }
 
-static TranslationBlock *
+static inline __attribute__((always_inline)) TranslationBlock *
 tb_htable_lookup_common(CPUState *cpu, TCGTBCPUState s, const struct qht *ht,
                         qht_lookup_func_t func)
 {
@@ -203,6 +212,7 @@ tb_htable_lookup_common(CPUState *cpu, TCGTBCPUState s, const struct qht *ht,
 
     desc.s = s;
     desc.env = cpu_env(cpu);
+    desc.page_addr1_valid = false;
     phys_pc = get_page_addr_code(desc.env, s.pc);
     if (phys_pc == -1) {
         return NULL;
@@ -216,6 +226,206 @@ tb_htable_lookup_common(CPUState *cpu, TCGTBCPUState s, const struct qht *ht,
 static TranslationBlock *tb_htable_lookup(CPUState *cpu, TCGTBCPUState s)
 {
     return tb_htable_lookup_common(cpu, s, &tb_ctx.htable, tb_lookup_cmp);
+}
+
+static inline __attribute__((always_inline))
+uint64_t tb_jmp_cache_state_tag(const TCGTBCPUState *s)
+{
+#if HOST_BIG_ENDIAN
+    return s->flags | ((uint64_t)s->cflags << 32);
+#else
+    uint64_t state_tag;
+
+    memcpy(&state_tag, &s->flags, sizeof(state_tag));
+    return state_tag;
+#endif
+}
+
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+#define XBOX_I386_HF_CS64_MASK (1u << 15)
+#define XBOX_I386_R_CS 1
+
+typedef struct XboxI386SegmentCachePrefix {
+    uint32_t selector;
+    uint32_t base;
+    uint32_t limit;
+    uint32_t flags;
+} XboxI386SegmentCachePrefix;
+
+/*
+ * XBOX builds are i386-softmmu. Keep this prefix in sync with
+ * target/i386/cpu.h through the fields needed by x86_get_tb_cpu_state().
+ */
+typedef struct XboxI386CPUArchStatePrefix {
+    uint32_t regs[8];
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t cc_dst;
+    uint32_t cc_src;
+    uint32_t cc_src2;
+    uint32_t cc_op;
+    int32_t df;
+    uint32_t hflags;
+    uint32_t hflags2;
+    XboxI386SegmentCachePrefix segs[6];
+} XboxI386CPUArchStatePrefix;
+
+static inline __attribute__((always_inline))
+uint64_t tb_jmp_cache_state_tag_parts(uint32_t flags, uint32_t cflags)
+{
+    return flags | ((uint64_t)cflags << 32);
+}
+
+static inline __attribute__((always_inline))
+uint64_t xbox_tb_jmp_cache_addr_tag(vaddr pc, uint64_t cs_base)
+{
+    return (uint32_t)pc | ((uint64_t)(uint32_t)cs_base << 32);
+}
+
+static inline __attribute__((always_inline))
+void xbox_get_tb_cpu_state_fast(CPUArchState *env, vaddr *pc,
+                                uint32_t *flags, uint64_t *cs_base,
+                                uint64_t *addr_tag)
+{
+    const XboxI386CPUArchStatePrefix *xenv = (const void *)env;
+    uint32_t hflags = xenv->hflags;
+    uint32_t eip = xenv->eip;
+
+    *flags = hflags;
+    if (unlikely(hflags & XBOX_I386_HF_CS64_MASK)) {
+        *pc = eip;
+        *cs_base = 0;
+        if (addr_tag) {
+            *addr_tag = (uint32_t)eip;
+        }
+    } else {
+        uint32_t base = xenv->segs[XBOX_I386_R_CS].base;
+        uint32_t pc32 = base + eip;
+
+        *pc = pc32;
+        *cs_base = base;
+        if (addr_tag) {
+            *addr_tag = (uint64_t)pc32 | ((uint64_t)base << 32);
+        }
+    }
+}
+#endif
+
+static inline __attribute__((always_inline))
+TCGTBCPUState tcg_get_tb_cpu_state(CPUState *cpu)
+{
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    vaddr pc;
+    uint32_t flags;
+    uint64_t cs_base;
+
+    xbox_get_tb_cpu_state_fast(cpu_env(cpu), &pc, &flags, &cs_base, NULL);
+    return (TCGTBCPUState){
+        .pc = pc,
+        .flags = flags,
+        .cs_base = cs_base,
+    };
+#else
+    return cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+#endif
+}
+
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static inline TranslationBlock *
+tb_jmp_cache_lookup_addr_tag(CPUState *cpu, uint64_t addr_tag,
+                             uint64_t state_tag, uint32_t hash)
+{
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    if (unlikely(jce->addr_tag != addr_tag ||
+                 jce->state_tag != state_tag)) {
+        return NULL;
+    }
+
+    /*
+     * Invalidations clear only tb. Keep the pointer load last so a metadata
+     * mismatch can fail without paying for an atomic read on the miss path.
+     */
+    return qatomic_read(&jce->tb);
+}
+#endif
+
+static inline TranslationBlock *tb_jmp_cache_lookup(CPUState *cpu,
+                                                    vaddr pc,
+                                                    uint64_t cs_base,
+                                                    uint64_t state_tag,
+                                                    uint32_t hash)
+{
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    return tb_jmp_cache_lookup_addr_tag(cpu,
+                                        xbox_tb_jmp_cache_addr_tag(pc, cs_base),
+                                        state_tag, hash);
+#else
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    if (unlikely(jce->pc != pc ||
+                 jce->cs_base != cs_base ||
+                 jce->state_tag != state_tag)) {
+        return NULL;
+    }
+
+    /*
+     * Invalidations clear only tb. Keep the pointer load last so a metadata
+     * mismatch can fail without paying for an atomic read on the miss path.
+     */
+    return qatomic_read(&jce->tb);
+#endif
+}
+
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static inline void tb_jmp_cache_store_addr_tag(CPUState *cpu, uint32_t hash,
+                                               uint64_t addr_tag,
+                                               uint64_t state_tag,
+                                               TranslationBlock *tb)
+{
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    jce->addr_tag = addr_tag;
+    jce->state_tag = state_tag;
+    qatomic_set(&jce->tb, tb);
+}
+#endif
+
+static inline void tb_jmp_cache_store(CPUState *cpu, uint32_t hash,
+                                      vaddr pc, uint64_t cs_base,
+                                      uint64_t state_tag,
+                                      TranslationBlock *tb)
+{
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    tb_jmp_cache_store_addr_tag(cpu, hash,
+                                xbox_tb_jmp_cache_addr_tag(pc, cs_base),
+                                state_tag, tb);
+#else
+    CPUJumpCache *jc = cpu->tb_jmp_cache;
+    typeof(jc->array[0]) *jce = &jc->array[hash];
+
+    jce->pc = pc;
+    jce->cs_base = cs_base;
+    jce->state_tag = state_tag;
+    qatomic_set(&jce->tb, tb);
+#endif
+}
+
+static inline TranslationBlock *tb_lookup_slow(CPUState *cpu, TCGTBCPUState s,
+                                               uint32_t hash,
+                                               uint64_t state_tag)
+{
+    TranslationBlock *tb = tb_htable_lookup(cpu, s);
+
+    if (tb == NULL) {
+        return NULL;
+    }
+
+    tb_jmp_cache_store(cpu, hash, s.pc, s.cs_base, state_tag, tb);
+    return tb;
 }
 
 static bool inv_tb_lookup_cmp(const void *p, const void *d)
@@ -249,38 +459,37 @@ TranslationBlock *inv_tb_htable_lookup(CPUState *cpu, TCGTBCPUState s)
 static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
 {
     TranslationBlock *tb;
-    CPUJumpCache *jc;
     uint32_t hash;
+    uint64_t state_tag;
 
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(s.cflags & CF_INVALID));
 
     hash = tb_jmp_cache_hash_func(s.pc);
-    jc = cpu->tb_jmp_cache;
-
-    tb = qatomic_read(&jc->array[hash].tb);
-    if (likely(tb &&
-               jc->array[hash].pc == s.pc &&
-               tb->cs_base == s.cs_base &&
-               tb->flags == s.flags &&
-               tb_cflags(tb) == s.cflags)) {
+    state_tag = tb_jmp_cache_state_tag(&s);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    tb = tb_jmp_cache_lookup_addr_tag(cpu,
+                                      xbox_tb_jmp_cache_addr_tag(s.pc,
+                                                                 s.cs_base),
+                                      state_tag, hash);
+#else
+    tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
+#endif
+    if (likely(tb)) {
         goto hit;
     }
 
-    tb = tb_htable_lookup(cpu, s);
-    if (tb == NULL) {
+    tb = tb_lookup_slow(cpu, s, hash, state_tag);
+    if (unlikely(tb == NULL)) {
         return NULL;
     }
-
-    jc->array[hash].pc = s.pc;
-    qatomic_set(&jc->array[hash].tb, tb);
 
 hit:
     /*
      * As long as tb is not NULL, the contents are consistent.  Therefore,
      * the virtual PC has to match for non-CF_PCREL translations.
      */
-    assert((tb_cflags(tb) & CF_PCREL) || tb->pc == s.pc);
+    tcg_debug_assert((tb_cflags(tb) & CF_PCREL) || tb->pc == s.pc);
     return tb;
 }
 
@@ -385,6 +594,65 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
         check_for_breakpoints_slow(cpu, pc, cflags);
 }
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static const void *__attribute__((noinline))
+xbox_lookup_tb_ptr_log(vaddr pc, CPUState *cpu, const TranslationBlock *tb)
+{
+    log_cpu_exec(pc, cpu, tb);
+    return tb->tc.ptr;
+}
+
+static inline __attribute__((always_inline)) TranslationBlock *
+xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
+                        uint64_t addr_tag, uint64_t state_tag,
+                        uint32_t hash)
+{
+    uint32_t flags = state_tag;
+    uint32_t cflags = state_tag >> 32;
+    TCGTBCPUState s = {
+        .pc = pc,
+        .flags = flags,
+        .cflags = cflags,
+        .cs_base = cs_base,
+    };
+    TranslationBlock *tb = tb_htable_lookup(cpu, s);
+
+    if (tb != NULL) {
+        tb_jmp_cache_store_addr_tag(cpu, hash, addr_tag, state_tag, tb);
+    }
+    return tb;
+}
+
+static const void *__attribute__((noinline))
+xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
+                               uint64_t addr_tag, uint64_t state_tag,
+                               uint32_t hash, bool log_tb)
+{
+    uint32_t flags = state_tag;
+    uint32_t cflags = state_tag >> 32;
+    TranslationBlock *tb;
+
+    if (check_for_breakpoints_slow(cpu, pc, &cflags)) {
+        cpu_loop_exit(cpu);
+    }
+
+    state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
+
+    tb = tb_jmp_cache_lookup_addr_tag(cpu, addr_tag, state_tag, hash);
+    if (tb == NULL) {
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, addr_tag, state_tag,
+                                     hash);
+        if (tb == NULL) {
+            return tcg_code_gen_epilogue;
+        }
+    }
+    if (log_tb) {
+        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
+    }
+    return tb->tc.ptr;
+}
+#endif
+
 /**
  * helper_lookup_tb_ptr: quick check for next tb
  * @env: current cpu state
@@ -407,16 +675,60 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
      */
     cpu->neg.can_do_io = true;
 
-    TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    vaddr pc;
+    uint32_t flags;
+    uint32_t cflags;
+    uint64_t cs_base;
+    uint64_t addr_tag;
+    uint64_t state_tag;
+    uint32_t hash;
+    bool log_tb;
+
+    xbox_get_tb_cpu_state_fast(env, &pc, &flags, &cs_base, &addr_tag);
+    cflags = curr_cflags(cpu);
+    state_tag = tb_jmp_cache_state_tag_parts(flags, cflags);
+    log_tb = unlikely(qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC));
+    hash = tb_jmp_cache_hash_func(pc);
+
+    if (unlikely(!QTAILQ_EMPTY(&cpu->breakpoints))) {
+        return xbox_lookup_tb_ptr_breakpoints(cpu, pc, cs_base, addr_tag,
+                                             state_tag, hash, log_tb);
+    }
+
+    tb = tb_jmp_cache_lookup_addr_tag(cpu, addr_tag, state_tag, hash);
+    if (unlikely(tb == NULL)) {
+        tb = xbox_lookup_tb_ptr_miss(cpu, pc, cs_base, addr_tag, state_tag,
+                                     hash);
+        if (tb == NULL) {
+            return tcg_code_gen_epilogue;
+        }
+    }
+
+    if (log_tb) {
+        return xbox_lookup_tb_ptr_log(pc, cpu, tb);
+    }
+
+    return tb->tc.ptr;
+#else
+    TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
     s.cflags = curr_cflags(cpu);
 
     if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
         cpu_loop_exit(cpu);
     }
 
-    tb = tb_lookup(cpu, s);
-    if (tb == NULL) {
-        return tcg_code_gen_epilogue;
+    {
+        uint32_t hash = tb_jmp_cache_hash_func(s.pc);
+        uint64_t state_tag = tb_jmp_cache_state_tag(&s);
+
+        tb = tb_jmp_cache_lookup(cpu, s.pc, s.cs_base, state_tag, hash);
+        if (unlikely(tb == NULL)) {
+            tb = tb_lookup_slow(cpu, s, hash, state_tag);
+            if (tb == NULL) {
+                return tcg_code_gen_epilogue;
+            }
+        }
     }
 
     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
@@ -424,6 +736,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
     }
 
     return tb->tc.ptr;
+#endif
 }
 
 /* Return the current PC from CPU, which may be cached in TB. */
@@ -531,8 +844,25 @@ static void cpu_exec_exit(CPUState *cpu)
     }
 }
 
-static void cpu_exec_longjmp_cleanup(CPUState *cpu)
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+static CPUState *__attribute__((noinline))
+cpu_exec_restore_longjmp_cpu(CPUState *fallback)
 {
+    return qemu_win_sigjmp_cpu ? qemu_win_sigjmp_cpu : fallback;
+}
+#endif
+
+static void __attribute__((noinline)) cpu_exec_longjmp_cleanup(CPUState *cpu)
+{
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    /*
+     * clang-cl's builtin longjmp path can invalidate TLS base pointers that
+     * were cached in the setjmp caller's frame. Refresh current_cpu here, in a
+     * separate noinline frame, so TLS is resolved after the jump.
+     */
+    current_cpu = cpu;
+#endif
+
     /* Non-buggy compilers preserve this; assert the correct value. */
     g_assert(cpu == current_cpu);
 
@@ -579,7 +909,7 @@ void cpu_exec_step_atomic(CPUState *cpu)
         g_assert(!cpu->running);
         cpu->running = true;
 
-        TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+        TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
         s.cflags = curr_cflags(cpu);
 
         /* Execute in a serial context. */
@@ -606,6 +936,9 @@ void cpu_exec_step_atomic(CPUState *cpu)
         cpu_tb_exec(cpu, tb, &tb_exit);
         cpu_exec_exit(cpu);
     } else {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        cpu = cpu_exec_restore_longjmp_cpu(cpu);
+#endif
         cpu_exec_longjmp_cleanup(cpu);
     }
 
@@ -789,9 +1122,6 @@ void tcg_kick_vcpu_thread(CPUState *cpu)
 
 static inline bool icount_exit_request(CPUState *cpu)
 {
-    if (!icount_enabled()) {
-        return false;
-    }
     if (cpu->cflags_next_tb != -1 && !(cpu->cflags_next_tb & CF_USE_ICOUNT)) {
         return false;
     }
@@ -799,7 +1129,8 @@ static inline bool icount_exit_request(CPUState *cpu)
 }
 
 static inline bool cpu_handle_interrupt(CPUState *cpu,
-                                        TranslationBlock **last_tb)
+                                        TranslationBlock **last_tb,
+                                        bool icount_enabled_for_run)
 {
     /*
      * If we have requested custom cflags with CF_NOIRQ we should
@@ -816,11 +1147,30 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
      * cpu->interrupt_request (see also store-release in
      * tcg_kick_vcpu_thread())
      */
+#ifdef XBOX
+    if (unlikely(icount_enabled_for_run) ||
+        unlikely(qatomic_read(&cpu->neg.icount_decr.u16.high))) {
+        qatomic_set_mb(&cpu->neg.icount_decr.u16.high, 0);
+    }
+#else
     qatomic_set_mb(&cpu->neg.icount_decr.u16.high, 0);
+#endif
 
 #ifdef CONFIG_USER_ONLY
     assert(!cpu_test_interrupt(cpu, ~0));
 #else
+#ifdef XBOX
+    /*
+     * EXITTB only invalidates the current TB chaining state.  Handle it
+     * before taking the BQL so pure chaining exits do not contend with the
+     * iothread.
+     */
+    if (unlikely(cpu_test_interrupt(cpu, CPU_INTERRUPT_EXITTB))) {
+        cpu_reset_interrupt(cpu, CPU_INTERRUPT_EXITTB);
+        *last_tb = NULL;
+    }
+#endif
+
     if (unlikely(cpu_test_interrupt(cpu, ~0))) {
         bql_lock();
         if (cpu_test_interrupt(cpu, CPU_INTERRUPT_DEBUG)) {
@@ -895,7 +1245,8 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
      * Finally, check if we need to exit to the main loop.
      * The corresponding store-release is in cpu_exit.
      */
-    if (unlikely(qatomic_load_acquire(&cpu->exit_request)) || icount_exit_request(cpu)) {
+    if (unlikely(qatomic_load_acquire(&cpu->exit_request)) ||
+        (unlikely(icount_enabled_for_run) && icount_exit_request(cpu))) {
         if (cpu->exception_index == -1) {
             cpu->exception_index = EXCP_INTERRUPT;
         }
@@ -957,15 +1308,16 @@ static int __attribute__((noinline))
 cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 {
     int ret;
+    bool icount_enabled_for_run = icount_enabled();
 
     /* if an exception is pending, we execute it here */
     while (!cpu_handle_exception(cpu, &ret)) {
         TranslationBlock *last_tb = NULL;
         int tb_exit = 0;
 
-        while (!cpu_handle_interrupt(cpu, &last_tb)) {
+        while (!cpu_handle_interrupt(cpu, &last_tb, icount_enabled_for_run)) {
             TranslationBlock *tb;
-            TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+            TCGTBCPUState s = tcg_get_tb_cpu_state(cpu);
             s.cflags = cpu->cflags_next_tb;
 
             /*
@@ -987,7 +1339,6 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
             tb = tb_lookup(cpu, s);
             if (tb == NULL) {
-                CPUJumpCache *jc;
                 uint32_t h;
 
                 mmap_lock();
@@ -999,9 +1350,9 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * for the fast lookup
                  */
                 h = tb_jmp_cache_hash_func(s.pc);
-                jc = cpu->tb_jmp_cache;
-                jc->array[h].pc = s.pc;
-                qatomic_set(&jc->array[h].tb, tb);
+                tb_jmp_cache_store(cpu, h, s.pc, s.cs_base,
+                                   tb_jmp_cache_state_tag(&s),
+                                   tb);
             }
 
 #ifndef CONFIG_USER_ONLY
@@ -1030,10 +1381,14 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
     return ret;
 }
 
-static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
+static int __attribute__((noinline))
+cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
     /* Prepare setjmp context for exception handling. */
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+        cpu = cpu_exec_restore_longjmp_cpu(cpu);
+#endif
         cpu_exec_longjmp_cleanup(cpu);
     }
 
@@ -1063,7 +1418,14 @@ int cpu_exec(CPUState *cpu)
      */
     init_delay_params(&sc, cpu);
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    qemu_win_sigjmp_cpu = NULL;
+#endif
     ret = cpu_exec_setjmp(cpu, &sc);
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    cpu = cpu_exec_restore_longjmp_cpu(cpu);
+    qemu_win_sigjmp_cpu = NULL;
+#endif
 
     cpu_exec_exit(cpu);
     return ret;

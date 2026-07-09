@@ -227,6 +227,7 @@ meson_options_help() {
   printf "%s\n" '  vnc-sasl        SASL authentication for VNC server'
   printf "%s\n" '  vpc             vpc image format support'
   printf "%s\n" '  vte             vte support for the gtk UI'
+  printf "%s\n" '  vulkan          Vulkan support'
   printf "%s\n" '  vvfat           vvfat image format support'
   printf "%s\n" '  werror          Treat warnings as errors'
   printf "%s\n" '  whpx            WHPX acceleration support'
@@ -580,6 +581,8 @@ _meson_option_parse() {
     --enable-vte) printf "%s" -Dvte=enabled ;;
     --disable-vte) printf "%s" -Dvte=disabled ;;
     --vtune=*) quote_sh "-Dvtune=$2" ;;
+    --enable-vulkan) printf "%s" -Dvulkan=enabled ;;
+    --disable-vulkan) printf "%s" -Dvulkan=disabled ;;
     --enable-vvfat) printf "%s" -Dvvfat=enabled ;;
     --disable-vvfat) printf "%s" -Dvvfat=disabled ;;
     --enable-werror) printf "%s" -Dwerror=true ;;

@@ -809,10 +809,21 @@ static inline int64_t get_max_clock_jump(void)
 /* get host real time in nanosecond */
 static inline int64_t get_clock_realtime(void)
 {
+#ifdef _WIN32
+    FILETIME ft;
+    ULARGE_INTEGER value;
+    const uint64_t unix_epoch_as_filetime = 116444736000000000ULL;
+
+    GetSystemTimeAsFileTime(&ft);
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+    return (value.QuadPart - unix_epoch_as_filetime) * 100;
+#else
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
     return tv.tv_sec * 1000000000LL + (tv.tv_usec * 1000);
+#endif
 }
 
 extern int64_t clock_start;
@@ -826,7 +837,14 @@ extern int64_t clock_freq;
 static inline int64_t get_clock(void)
 {
     LARGE_INTEGER ti;
+
     QueryPerformanceCounter(&ti);
+    if (likely(clock_freq == 10000000)) {
+        return ti.QuadPart * 100;
+    }
+    if (clock_freq == NANOSECONDS_PER_SECOND) {
+        return ti.QuadPart;
+    }
     return muldiv64(ti.QuadPart, NANOSECONDS_PER_SECOND, clock_freq);
 }
 

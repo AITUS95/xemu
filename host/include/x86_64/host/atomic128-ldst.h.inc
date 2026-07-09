@@ -11,7 +11,7 @@
 #ifndef X86_64_ATOMIC128_LDST_H
 #define X86_64_ATOMIC128_LDST_H
 
-#ifdef CONFIG_INT128_TYPE
+#if defined(CONFIG_INT128_TYPE) && !defined(_MSC_VER)
 #include "host/cpuinfo.h"
 #include "tcg/debug-assert.h"
 #include <immintrin.h>

@@ -62,8 +62,19 @@ endif
 override_dh_auto_configure:
 
 override_dh_auto_build:
-	./build.sh ${XEMU_BUILD_OPTIONS} ${common_configure_opts} || \
-	{ echo ===== BUILD FAILED ===; cat build/meson-logs/meson-log.txt; exit 1; }
+	stamp_file="$${XEMU_BUILD_STAMP_FILE:-.build-config-linux}"; \
+	stamp_value="$${XEMU_BUILD_STAMP_VALUE:-}"; \
+	if [ -n "$$stamp_value" ] && [ -f build/Makefile ] && [ -f "$$stamp_file" ] && \
+	   printf '%s' "$$stamp_value" | cmp -s "$$stamp_file" -; then \
+		./build.sh --skip-configure ${XEMU_BUILD_OPTIONS} ${common_configure_opts} || \
+		{ echo ===== BUILD FAILED ===; cat build/meson-logs/meson-log.txt; exit 1; }; \
+	else \
+		./build.sh ${XEMU_BUILD_OPTIONS} ${common_configure_opts} || \
+		{ echo ===== BUILD FAILED ===; cat build/meson-logs/meson-log.txt; exit 1; }; \
+		if [ -n "$$stamp_value" ]; then \
+			printf '%s' "$$stamp_value" > "$$stamp_file"; \
+		fi; \
+	fi
 	cp debian/copyright debian/qemu.deb.copyright
 	cp dist/LICENSE.txt debian/copyright
 

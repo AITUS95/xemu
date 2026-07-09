@@ -22,6 +22,7 @@
 static void create_buffer(PGRAPHState *pg, StorageBuffer *buffer)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    VmaAllocationInfo alloc_info = { 0 };
 
     VkBufferCreateInfo buffer_create_info = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -31,7 +32,10 @@ static void create_buffer(PGRAPHState *pg, StorageBuffer *buffer)
     };
     VK_CHECK(vmaCreateBuffer(r->allocator, &buffer_create_info,
                              &buffer->alloc_info, &buffer->buffer,
-                             &buffer->allocation, NULL));
+                             &buffer->allocation, &alloc_info));
+    buffer->mapped = alloc_info.pMappedData;
+    vmaGetAllocationMemoryProperties(r->allocator, buffer->allocation,
+                                     &buffer->properties);
 }
 
 static void destroy_buffer(PGRAPHState *pg, StorageBuffer *buffer)
@@ -55,19 +59,33 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                  VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
     };
+    VmaAllocationCreateInfo host_readback_alloc_create_info = {
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        .preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+    };
+    VmaAllocationCreateInfo host_seq_write_alloc_create_info = {
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+    };
     VmaAllocationCreateInfo device_alloc_create_info = {
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT
     };
 
     r->storage_buffers[BUFFER_STAGING_DST] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_readback_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .buffer_size = 4096 * 4096 * 4,
     };
 
     r->storage_buffers[BUFFER_STAGING_SRC] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_STAGING_DST].buffer_size,
     };
@@ -94,7 +112,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_INDEX_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_INDEX].buffer_size,
     };
@@ -109,6 +127,8 @@ void pgraph_vk_init_buffers(NV2AState *d)
     r->bitmap_size = memory_region_size(d->vram) / 4096;
     r->uploaded_bitmap = bitmap_new(r->bitmap_size);
     bitmap_clear(r->uploaded_bitmap, 0, r->bitmap_size);
+    r->vertex_ram_in_use_bitmap = bitmap_new(r->bitmap_size);
+    bitmap_clear(r->vertex_ram_in_use_bitmap, 0, r->bitmap_size);
 
     r->storage_buffers[BUFFER_VERTEX_INLINE] = (StorageBuffer){
         .alloc_info = device_alloc_create_info,
@@ -119,7 +139,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_VERTEX_INLINE_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_VERTEX_INLINE].buffer_size,
     };
@@ -132,7 +152,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
     };
 
     r->storage_buffers[BUFFER_UNIFORM_STAGING] = (StorageBuffer){
-        .alloc_info = host_alloc_create_info,
+        .alloc_info = host_seq_write_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .buffer_size = r->storage_buffers[BUFFER_UNIFORM].buffer_size,
     };
@@ -161,7 +181,9 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     for (int i = 0; i < BUFFER_COUNT; i++) {
-        if (r->storage_buffers[i].mapped) {
+        if (r->storage_buffers[i].mapped &&
+            !(r->storage_buffers[i].alloc_info.flags &
+              VMA_ALLOCATION_CREATE_MAPPED_BIT)) {
             vmaUnmapMemory(r->allocator, r->storage_buffers[i].allocation);
         }
         destroy_buffer(pg, &r->storage_buffers[i]);
@@ -169,6 +191,8 @@ void pgraph_vk_finalize_buffers(NV2AState *d)
 
     g_free(r->uploaded_bitmap);
     r->uploaded_bitmap = NULL;
+    g_free(r->vertex_ram_in_use_bitmap);
+    r->vertex_ram_in_use_bitmap = NULL;
 }
 
 bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
@@ -180,24 +204,60 @@ bool pgraph_vk_buffer_has_space_for(PGRAPHState *pg, int index,
     return (ROUND_UP(b->buffer_offset, alignment) + size) <= b->buffer_size;
 }
 
+bool pgraph_vk_buffer_has_space_for_ranges(PGRAPHState *pg, int index,
+                                           const VkDeviceSize *sizes,
+                                           size_t count,
+                                           VkDeviceAddress alignment)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *b = &r->storage_buffers[index];
+    VkDeviceSize offset = b->buffer_offset;
+
+    for (size_t i = 0; i < count; i++) {
+        offset = ROUND_UP(offset, alignment);
+        offset += sizes[i];
+    }
+
+    return offset <= b->buffer_size;
+}
+
+void pgraph_vk_flush_buffer_range(PGRAPHState *pg, int index,
+                                  VkDeviceSize offset, VkDeviceSize size)
+{
+    if (!size) {
+        return;
+    }
+
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    StorageBuffer *b = &r->storage_buffers[index];
+
+    assert(offset <= b->buffer_size);
+    assert(size <= b->buffer_size - offset);
+
+    VkDeviceSize atom_size = MAX((VkDeviceSize)1,
+                                 r->device_props.limits.nonCoherentAtomSize);
+    VkDeviceSize flush_offset = QEMU_ALIGN_DOWN(offset, atom_size);
+    VkDeviceSize flush_end = MIN(QEMU_ALIGN_UP(offset + size, atom_size),
+                                 b->buffer_size);
+
+    VK_CHECK(vmaFlushAllocation(r->allocator, b->allocation, flush_offset,
+                                flush_end - flush_offset));
+}
+
 VkDeviceSize pgraph_vk_append_to_buffer(PGRAPHState *pg, int index, void **data,
                                         VkDeviceSize *sizes, size_t count,
                                         VkDeviceAddress alignment)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-
-    VkDeviceSize total_size = 0;
-    for (int i = 0; i < count; i++) {
-        total_size += sizes[i];
-    }
-    assert(pgraph_vk_buffer_has_space_for(pg, index, total_size, alignment));
-
     StorageBuffer *b = &r->storage_buffers[index];
+    assert(pgraph_vk_buffer_has_space_for_ranges(pg, index, sizes, count,
+                                                 alignment));
+
     VkDeviceSize starting_offset = ROUND_UP(b->buffer_offset, alignment);
 
     assert(b->mapped);
 
-    for (int i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++) {
         b->buffer_offset = ROUND_UP(b->buffer_offset, alignment);
         memcpy(b->mapped + b->buffer_offset, data[i], sizes[i]);
         b->buffer_offset += sizes[i];

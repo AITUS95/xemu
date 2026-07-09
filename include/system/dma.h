@@ -12,7 +12,7 @@
 
 #include "system/memory.h"
 #include "system/address-spaces.h"
-#include "block/block.h"
+#include "../block/block.h"
 #include "block/accounting.h"
 
 typedef enum {

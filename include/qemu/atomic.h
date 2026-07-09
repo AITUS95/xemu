@@ -18,7 +18,12 @@
 #include "compiler.h"
 
 /* Compiler barrier */
+#ifdef _MSC_VER
+#include <intrin.h>
+#define barrier()   _ReadWriteBarrier()
+#else
 #define barrier()   ({ asm volatile("" ::: "memory"); (void)0; })
+#endif
 
 #ifndef __ATOMIC_RELAXED
 #error "Expecting C11 atomic ops"

@@ -8,7 +8,7 @@
 #ifndef X86_64_LOAD_EXTRACT_AL16_AL8_H
 #define X86_64_LOAD_EXTRACT_AL16_AL8_H
 
-#ifdef CONFIG_INT128_TYPE
+#if defined(CONFIG_INT128_TYPE) && !defined(_MSC_VER)
 #include "host/atomic128-ldst.h.inc"
 
 /**

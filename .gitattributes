@@ -4,6 +4,7 @@
 *.py            diff=python
 *.rs            diff=rust
 *.rs.inc        diff=rust
+*.sh            text eol=lf
 Cargo.lock      diff=toml merge=binary
 
 *.patch         -text -whitespace

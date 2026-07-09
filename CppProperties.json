@@ -1,0 +1,50 @@
+{
+  "configurations": [
+    {
+      "name": "xemu MSVC x64",
+      "inheritEnvironments": [
+        "msvc_x64"
+      ],
+      "includePath": [
+        "${env.INCLUDE}",
+        "${workspaceRoot}",
+        "${workspaceRoot}\\include",
+        "${workspaceRoot}\\host\\include",
+        "${workspaceRoot}\\host\\include\\x86_64",
+        "${workspaceRoot}\\build-msvc",
+        "${workspaceRoot}\\build-msvc\\include",
+        "${workspaceRoot}\\build-msvc\\qapi",
+        "${workspaceRoot}\\build-msvc-debug",
+        "${workspaceRoot}\\build-msvc-debug\\include",
+        "${workspaceRoot}\\build-msvc-debug\\qapi",
+        "${workspaceRoot}\\build-msvc-profile",
+        "${workspaceRoot}\\build-msvc-profile\\include",
+        "${workspaceRoot}\\build-msvc-profile\\qapi",
+        "${workspaceRoot}\\build-msvc-release",
+        "${workspaceRoot}\\build-msvc-release\\include",
+        "${workspaceRoot}\\build-msvc-release\\qapi",
+        "${workspaceRoot}\\subprojects\\libvhost-user",
+        "${workspaceRoot}\\subprojects\\libvhost-user\\include",
+        "${workspaceRoot}\\subprojects\\libvduse",
+        "${workspaceRoot}\\subprojects\\libvduse\\include",
+        "${workspaceRoot}\\thirdparty",
+        "${workspaceRoot}\\thirdparty\\nvapi"
+      ],
+      "defines": [
+        "WIN32",
+        "_WIN32",
+        "_WINDOWS",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_GNU_SOURCE",
+        "XBOX=1",
+        "CONFIG_WIN32=1",
+        "CONFIG_TCG=1",
+        "_AMD64_",
+        "_M_X64=100",
+        "NOMINMAX"
+      ],
+      "compilerSwitches": "/std:c11 /Zc:preprocessor",
+      "intelliSenseMode": "windows-msvc-x64"
+    }
+  ]
+}

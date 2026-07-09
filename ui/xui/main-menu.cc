@@ -59,7 +59,7 @@ void MainMenuGeneralView::Draw()
            "Check for updates whenever xemu is opened");
 #endif
 
-#if defined(__x86_64__)
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(CONFIG_XEMU_HARD_FPU)
     SectionTitle("Performance");
     Toggle("Hard FPU emulation", &g_config.perf.hard_fpu,
            "Use hardware-accelerated floating point emulation (requires restart)");
@@ -846,6 +846,8 @@ void MainMenuAudioView::Draw()
     SectionTitle("Quality");
     Toggle("Real-time DSP processing", &g_config.audio.use_dsp,
            "Enable improved audio accuracy (experimental)");
+    Toggle("DSP JIT engine", &g_config.audio.use_dsp_jit,
+           "Use DSP JIT engine");
 
 }
 

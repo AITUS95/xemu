@@ -49,6 +49,7 @@ typedef struct ProgrammableVshState {
 
 typedef struct {
     unsigned int surface_scale_factor;  // FIXME: Remove
+    bool apply_scaled_pixel_center_bias;
 
     uint16_t compressed_attrs;
     uint16_t uniform_attrs;

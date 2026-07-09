@@ -36,36 +36,57 @@
 #define TB_JMP_ADDR_MASK (TB_JMP_PAGE_SIZE - 1)
 #define TB_JMP_PAGE_MASK (TB_JMP_CACHE_SIZE - TB_JMP_PAGE_SIZE)
 
-static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
+#ifdef XBOX
+/*
+ * xemu's XBOX build is i386-softmmu, so the target page size is fixed at
+ * 4 KiB. Keep this constant to avoid a target_page.bits load on TB lookups.
+ */
+#define TB_JMP_TARGET_PAGE_BITS 12
+typedef uint32_t tb_jmp_cache_vaddr_t;
+#else
+#define TB_JMP_TARGET_PAGE_BITS TARGET_PAGE_BITS
+typedef vaddr tb_jmp_cache_vaddr_t;
+#endif
+
+#define TB_JMP_PAGE_SHIFT (TB_JMP_TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)
+
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_page(vaddr pc)
 {
-    vaddr tmp;
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
+    tb_jmp_cache_vaddr_t tmp = pc;
+
+    tmp ^= tmp >> TB_JMP_PAGE_SHIFT;
+    return (tmp >> TB_JMP_PAGE_SHIFT) & TB_JMP_PAGE_MASK;
 }
 
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
-    vaddr tmp;
-    tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
-    return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
-           | (tmp & TB_JMP_ADDR_MASK));
+    tb_jmp_cache_vaddr_t tmp = pc;
+
+    tmp ^= tmp >> TB_JMP_PAGE_SHIFT;
+    return ((tmp >> TB_JMP_PAGE_SHIFT) & TB_JMP_PAGE_MASK) |
+           (tmp & TB_JMP_ADDR_MASK);
 }
 
 #else
 
 /* In user-mode we can get better hashing because we do not have a TLB */
-static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+static inline __attribute__((always_inline))
+unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
     return (pc ^ (pc >> TB_JMP_CACHE_BITS)) & (TB_JMP_CACHE_SIZE - 1);
 }
 
 #endif /* CONFIG_SOFTMMU */
 
-static inline
+static inline __attribute__((always_inline))
 uint32_t tb_hash_func(tb_page_addr_t phys_pc, vaddr pc,
                       uint32_t flags, uint64_t flags2, uint32_t cf_mask)
 {
-    return qemu_xxhash8(phys_pc, pc, flags2, flags, cf_mask);
+    uint64_t h64 = qemu_xxhash64_4(phys_pc, pc, flags2,
+                                   flags | ((uint64_t)cf_mask << 32));
+    return h64 ^ (h64 >> 32);
 }
 
 #endif

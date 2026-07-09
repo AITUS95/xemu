@@ -367,22 +367,26 @@ foreach lang : all_languages
       # endif
       #endif''')
     # ok
+  elif compiler.get_id() == 'msvc' and compiler.version().version_compare('>=19.30')
+    # ok
   elif compiler.get_id() == 'emscripten'
     # ok
   else
-    error('You either need GCC v7.4 or Clang v10.0 (or XCode Clang v15.0) to compile QEMU')
+    error('You either need GCC v7.4, Clang v10.0 (or XCode Clang v15.0), or MSVC v19.30 to compile QEMU')
   endif
 endforeach
 
 # default flags for all hosts
-# We use -fwrapv to tell the compiler that we require a C dialect where
-# left shift of signed integers is well defined and has the expected
-# 2s-complement style results. (Both clang and gcc agree that it
+# For GNU-like compilers we use -fwrapv to tell the compiler that we require a
+# C dialect where left shift of signed integers is well defined and has the
+# expected 2s-complement style results. (Both clang and gcc agree that it
 # provides these semantics.)
 
 qemu_common_flags = [
-  '-D_GNU_SOURCE', '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-common', '-fwrapv' ]
+  '-D_GNU_SOURCE', '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE' ]
+if cc.get_id() != 'msvc'
+  qemu_common_flags += ['-fno-strict-aliasing', '-fno-common', '-fwrapv']
+endif
 qemu_cflags = []
 qemu_ldflags = []
 
@@ -400,8 +404,14 @@ elif host_os == 'sunos'
 elif host_os == 'haiku'
   qemu_common_flags += ['-DB_USE_POSITIVE_POSIX_ERRORS', '-D_BSD_SOURCE', '-fPIC']
 elif host_os == 'windows'
+  qemu_common_flags += [
+    '-D_CRT_NONSTDC_NO_DEPRECATE',
+    '-D_CRT_SECURE_NO_DEPRECATE',
+    '-D_CRT_SECURE_NO_WARNINGS',
+    '-D_WINSOCK_DEPRECATED_NO_WARNINGS',
+  ]
   # plugins use delaylib, and clang needs to be used with lld to make it work.
-  if compiler.get_id() == 'clang' and compiler.get_linker_id() != 'ld.lld'
+  if compiler.get_id() == 'clang' and compiler.get_linker_id() not in ['ld.lld', 'link', 'lld-link']
     error('On windows, you need to use lld with clang - use msys2 clang64/clangarm64 env')
   endif
 endif
@@ -435,33 +445,48 @@ if host_arch in ['i386', 'x86_64']
     error('x86_64-v1 required for x86-64 hosts')
   endif
 
-  # add flags for individual instruction set extensions
-  if get_option('x86_version') >= '1'
-    if host_arch == 'i386'
-      qemu_common_flags = ['-mfpmath=sse'] + qemu_common_flags
-    else
-      # present on basically all processors but technically not part of
-      # x86-64-v1, so only include -mneeded for x86-64 version 2 and above
-      qemu_isa_flags += ['-mcx16']
+  if cc.get_id() == 'msvc'
+    if get_option('x86_version') not in ['0', '1']
+      warning('x86_version tuning is not implemented for MSVC; relying on compiler defaults')
     endif
-  endif
-  if get_option('x86_version') >= '2'
-    qemu_isa_flags += ['-mpopcnt']
-    qemu_isa_flags += cc.get_supported_arguments('-mneeded')
-  endif
-  if get_option('x86_version') >= '3'
-    qemu_isa_flags += ['-mmovbe', '-mabm', '-mbmi', '-mbmi2', '-mfma', '-mf16c']
-  endif
+  else
+    # add flags for individual instruction set extensions
+    if get_option('x86_version') >= '1'
+      if host_arch == 'i386'
+        qemu_common_flags = ['-mfpmath=sse'] + qemu_common_flags
+      else
+        # present on basically all processors but technically not part of
+        # x86-64-v1, so only include -mneeded for x86-64 version 2 and above
+        qemu_isa_flags += ['-mcx16']
+      endif
+    endif
+    if get_option('x86_version') >= '2'
+      qemu_isa_flags += ['-mpopcnt']
+      qemu_isa_flags += cc.get_supported_arguments('-mneeded')
+    endif
+    if get_option('x86_version') >= '3'
+      qemu_isa_flags += ['-mmovbe', '-mlzcnt', '-mbmi', '-mbmi2', '-mfma', '-mf16c']
+      # The Win64 ABI only guarantees 16-byte stack alignment and its SEH unwind
+      # format cannot express realignment beyond that, but GCC's autovectorizer
+      # emits 32-byte-aligned spills (vmovdqa) for 256-bit ymm registers under
+      # -mavx2, which then fault at runtime. Cap autovectorization at 128-bit on
+      # Windows to avoid the crash while keeping the rest of the v3 ISA (FMA,
+      # BMI2, LZCNT, MOVBE, VEX-encoded 128-bit ops).
+      if host_os == 'windows'
+        qemu_isa_flags += cc.get_supported_arguments('-mprefer-vector-width=128')
+      endif
+    endif
 
-  # add required vector instruction set (each level implies those below)
-  if get_option('x86_version') == '1'
-    qemu_isa_flags += ['-msse2']
-  elif get_option('x86_version') == '2'
-    qemu_isa_flags += ['-msse4.2']
-  elif get_option('x86_version') == '3'
-    qemu_isa_flags += ['-mavx2']
-  elif get_option('x86_version') == '4'
-    qemu_isa_flags += ['-mavx512f', '-mavx512bw', '-mavx512cd', '-mavx512dq', '-mavx512vl']
+    # add required vector instruction set (each level implies those below)
+    if get_option('x86_version') == '1'
+      qemu_isa_flags += ['-msse2']
+    elif get_option('x86_version') == '2'
+      qemu_isa_flags += ['-msse4.2']
+    elif get_option('x86_version') == '3'
+      qemu_isa_flags += ['-mavx2']
+    elif get_option('x86_version') == '4'
+      qemu_isa_flags += ['-mavx512f', '-mavx512bw', '-mavx512cd', '-mavx512dq', '-mavx512vl']
+    endif
   endif
 endif
 
@@ -768,6 +793,16 @@ warn_flags = [
   '-Wno-tautological-type-limit-compare',
   '-Wno-typedef-redefinition',
 ]
+
+if host_os == 'windows'
+  warn_flags += [
+    '-Wno-deprecated-literal-operator',
+    '-Wno-deprecated-non-prototype',
+    '-Wno-extern-c-compat',
+    '-Wno-nullability-completeness',
+    '-Wno-tautological-constant-out-of-range-compare',
+  ]
+endif
 
 if host_os != 'darwin'
   tsa_has_cleanup = cc.compiles('''
@@ -1098,10 +1133,16 @@ endif
 
 if not cc.compiles('''
   #include <glib.h>
+  #ifdef _MSC_VER
+  #include <stddef.h>
+  #define QEMU_BUILD_BUG_ON(x) \
+  typedef char qemu_build_bug_on[(x)?-1:1];
+  #else
   #include <unistd.h>
 
   #define QEMU_BUILD_BUG_ON(x) \
   typedef char qemu_build_bug_on[(x)?-1:1] __attribute__((unused));
+  #endif
 
   int main(void) {
      QEMU_BUILD_BUG_ON(sizeof(size_t) != GLIB_SIZEOF_SIZE_T);
@@ -2375,13 +2416,63 @@ if not get_option('libdw').auto() or \
                        required: get_option('libdw'))
 endif
 
+hard_fpu = host_arch == 'x86_64'
+hard_fpu_native_long_double = false
+hard_fpu_native_float80 = false
+if hard_fpu
+  hard_fpu_native_long_double = cc.compiles('''
+    #include <float.h>
+    #if LDBL_MANT_DIG <= DBL_MANT_DIG
+    # error long double does not provide extended precision
+    #endif
+    int main(void) { return 0; }
+  ''', name: 'host long double has extended precision')
+  if not hard_fpu_native_long_double
+    hard_fpu_native_float80 = cc.compiles('''
+      #if !defined(__clang__)
+      # error __float80 probe only supported with clang
+      #endif
+      typedef union {
+        struct {
+          unsigned long long low;
+          unsigned short high;
+        };
+        __float80 fval;
+      } XemuFloat80Probe;
+      int main(void) {
+        XemuFloat80Probe value = { 0 };
+        value.fval = (__float80)1.0;
+        return sizeof(value) < 10;
+      }
+    ''', name: 'host compiler supports __float80')
+  endif
+endif
+hard_fpu_native = hard_fpu_native_long_double or hard_fpu_native_float80
+hard_fpu_native_host_type = 'soft fallback'
+if hard_fpu_native_long_double
+  hard_fpu_native_host_type = 'long double'
+elif hard_fpu_native_float80
+  hard_fpu_native_host_type = '__float80'
+endif
+
 vulkan = not_found
 libglslang = not_found
 
-if host_os == 'windows'
-  vulkan = declare_dependency(compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'])
+if host_os == 'windows' and not get_option('vulkan').disabled()
+  vulkan_dep = dependency('vulkan', required: false)
+  if vulkan_dep.found()
+    vulkan = declare_dependency(
+      compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'],
+      dependencies: vulkan_dep)
+  elif cc.has_header('vulkan/vk_platform.h')
+    vulkan = declare_dependency(compile_args: ['-DVK_USE_PLATFORM_WIN32_KHR'])
+  elif get_option('vulkan').enabled()
+    error('Vulkan support requested, but vulkan/vk_platform.h was not found')
+  endif
 elif host_os == 'linux'
-  vulkan = dependency('vulkan')
+  vulkan = dependency('vulkan', required: get_option('vulkan'))
+elif get_option('vulkan').enabled()
+  error('Vulkan support requested, but this host OS is not supported')
 endif
 
 if vulkan.found()
@@ -2390,6 +2481,9 @@ if vulkan.found()
     # FIXME: Get spirv-tools to enable opt.
     glslang_opts = cmake.subproject_options()
     glslang_opts.add_cmake_defines({'ENABLE_OPT': false, 'ENABLE_HLSL': false})
+    if host_os == 'windows'
+      glslang_opts.append_compile_args('cpp', '-Wno-unused-but-set-variable')
+    endif
     glslang_subpro = cmake.subproject('glslang', options: glslang_opts)
     libglslang = declare_dependency(link_with: [
           glslang_subpro.target('glslang'),
@@ -2421,6 +2515,7 @@ endif
 
 if host_os == 'windows'
   libpcap = declare_dependency(include_directories: 'winpcap-loader/include',
+                               compile_args: ['-Wno-strict-prototypes'],
                                link_args: ['-lws2_32'])
 else
   libpcap = dependency('libpcap', method: 'pkg-config', required: true)
@@ -2689,6 +2784,9 @@ if numa.found()
 endif
 config_host_data.set('CONFIG_OPENGL', opengl.found())
 config_host_data.set('CONFIG_VULKAN', vulkan.found())
+config_host_data.set('CONFIG_XEMU_HARD_FPU', hard_fpu)
+config_host_data.set('CONFIG_XEMU_HARD_FPU_NATIVE', hard_fpu_native)
+config_host_data.set('CONFIG_XEMU_HARD_FPU_FLOAT80', hard_fpu_native_float80)
 config_host_data.set('CONFIG_PLUGIN', get_option('plugins'))
 config_host_data.set('CONFIG_RBD', rbd.found())
 config_host_data.set('CONFIG_RDMA', rdma.found())
@@ -3327,7 +3425,7 @@ if have_cpuid_h
 else
   have_avx2 = false
   have_avx512bw = false
-  if get_option('x86_version') >= '3'
+  if get_option('x86_version') >= '3' and host_arch in ['i386', 'x86_64']
     error('Cannot enable AVX optimizations due to missing cpuid.h')
   endif
 endif
@@ -5163,6 +5261,8 @@ summary_info += {'libusb':            libusb}
 summary_info += {'usb net redir':     usbredir}
 summary_info += {'OpenGL support (epoxy)': opengl}
 summary_info += {'Vulkan support':    vulkan}
+summary_info += {'Hard FPU emulation': hard_fpu}
+summary_info += {'Hard FPU native host type': hard_fpu_native_host_type}
 summary_info += {'GBM':               gbm}
 summary_info += {'libiscsi support':  libiscsi}
 summary_info += {'libnfs support':    libnfs}

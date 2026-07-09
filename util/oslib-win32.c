@@ -36,6 +36,11 @@
 #include "qemu/error-report.h"
 #include <malloc.h>
 
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+__thread int qemu_win_sigjmp_value;
+__thread void *qemu_win_sigjmp_cpu;
+#endif
+
 static int get_allocation_granularity(void)
 {
     SYSTEM_INFO system_info;
@@ -536,7 +541,11 @@ int qemu_close_socket_osfhandle(int fd)
         return -1;
     }
 
+#ifdef _MSC_VER
+    __try {
+#else
     __try1(win32_close_exception_handler) {
+#endif
         /*
          * close() returns EBADF since we PROTECT_FROM_CLOSE the underlying
          * handle, but the FD is actually freed
@@ -545,8 +554,13 @@ int qemu_close_socket_osfhandle(int fd)
             return -1;
         }
     }
+#ifdef _MSC_VER
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+#else
     __except1 {
     }
+#endif
 
     if (!SetHandleInformation((HANDLE)s, flags, flags)) {
         errno = EACCES;

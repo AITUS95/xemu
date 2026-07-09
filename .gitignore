@@ -1,8 +1,21 @@
 /GNUmakefile
 /build/
+/build-msvc/
+/build-msvc-debug/
+/build-msvc-profile/
+/build-msvc-release/
 /.cache/
+/.venv-msvc/
+/.vcpkg-binary-cache/
+/.vcpkg-downloads/
+/.vcpkg-tool/
+/.msvc-mingw-cache/
+/.vs/
 /.vscode/
+*.vcxproj.user
+/xemu-msvc/
 *.pyc
+__pycache__/
 .sdk
 .stgit-*
 .git-submodule-status
@@ -22,6 +35,10 @@ GTAGS
 
 build.log
 /dist
+/msvc-artifacts/
+/msvc-probe-logs/
+/subprojects/packagecache/
+/xemu-msvc-logs/
 /xemu.ini
 /macos-libs/
 /macos-pkgs/

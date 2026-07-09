@@ -1,0 +1,245 @@
+{
+  "version": "0.2.1",
+  "tasks": [
+    {
+      "taskLabel": "xemu MSVC Debug",
+      "taskName": "xemu MSVC Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Profile",
+      "taskName": "xemu MSVC Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Release",
+      "taskName": "xemu MSVC Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC All",
+      "taskName": "xemu MSVC All",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "build",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "All"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Debug",
+      "taskName": "xemu MSVC Rebuild Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug",
+        "-Rebuild"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Profile",
+      "taskName": "xemu MSVC Rebuild Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile",
+        "-Rebuild"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Rebuild Release",
+      "taskName": "xemu MSVC Rebuild Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "rebuild",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release",
+        "-Rebuild"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean Debug",
+      "taskName": "xemu MSVC Clean Debug",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Debug",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean Profile",
+      "taskName": "xemu MSVC Clean Profile",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Profile",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean Release",
+      "taskName": "xemu MSVC Clean Release",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "Release",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Clean All",
+      "taskName": "xemu MSVC Clean All",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "clean",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-Config",
+        "All",
+        "-Clean"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Check Environment",
+      "taskName": "xemu MSVC Check Environment",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "custom",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-CheckOnly"
+      ]
+    },
+    {
+      "taskLabel": "xemu MSVC Bootstrap vcpkg",
+      "taskName": "xemu MSVC Bootstrap vcpkg",
+      "appliesTo": "/",
+      "type": "launch",
+      "contextType": "custom",
+      "workingDirectory": "${workspaceRoot}",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceRoot}\\build-msvc.ps1",
+        "-CheckOnly",
+        "-BootstrapVcpkg"
+      ]
+    }
+  ]
+}

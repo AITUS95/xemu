@@ -18,6 +18,9 @@ bool physical_memory_get_dirty_flag(ram_addr_t addr, unsigned client);
 
 bool physical_memory_is_clean(ram_addr_t addr);
 
+bool physical_memory_get_dirty(ram_addr_t start, ram_addr_t length,
+                               unsigned client);
+
 uint8_t physical_memory_range_includes_clean(ram_addr_t start,
                                              ram_addr_t length,
                                              uint8_t mask);

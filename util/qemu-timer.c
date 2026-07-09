@@ -319,6 +319,107 @@ int qemu_timeout_ns_to_ms(int64_t ns)
     return MIN(ms, INT32_MAX);
 }
 
+#if defined(XBOX) && !defined(CONFIG_PPOLL)
+#define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
+#define XBOX_BUSYWAIT_SPIN_NS 10000
+#define XBOX_100NS_PER_SECOND 10000000LL
+
+#ifdef _WIN32
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+static void xbox_busy_wait_timer_destroy(gpointer opaque)
+{
+    CloseHandle((HANDLE)opaque);
+}
+
+static GPrivate xbox_busy_wait_timer =
+    G_PRIVATE_INIT(xbox_busy_wait_timer_destroy);
+
+static HANDLE xbox_busy_wait_get_timer(void)
+{
+    HANDLE timer = g_private_get(&xbox_busy_wait_timer);
+
+    if (!timer) {
+        timer = CreateWaitableTimerExW(NULL, NULL,
+                                       CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                       TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (timer) {
+            g_private_set(&xbox_busy_wait_timer, timer);
+        }
+    }
+
+    return timer;
+}
+
+static void xbox_wait_until_qpc(int64_t deadline)
+{
+    LARGE_INTEGER counter;
+    LARGE_INTEGER due_time;
+    HANDLE timer;
+    int64_t ticks;
+    int64_t wait_100ns;
+
+    QueryPerformanceCounter(&counter);
+    ticks = deadline - counter.QuadPart;
+    if (ticks <= 0) {
+        return;
+    }
+
+    timer = xbox_busy_wait_get_timer();
+    if (!timer) {
+        return;
+    }
+
+    wait_100ns = DIV_ROUND_UP(ticks * XBOX_100NS_PER_SECOND, clock_freq);
+    due_time.QuadPart = -MAX(wait_100ns, 1);
+
+    if (SetWaitableTimer(timer, &due_time, 0, NULL, NULL, FALSE)) {
+        WaitForSingleObject(timer, INFINITE);
+    }
+}
+#endif
+
+static void xbox_busy_wait_ns(int64_t timeout)
+{
+#ifdef _WIN32
+    LARGE_INTEGER counter;
+    int64_t deadline;
+    int64_t spin_start;
+    int64_t spin_ticks;
+    int64_t ticks;
+
+    /*
+     * qemu_clock_get_ns(QEMU_CLOCK_REALTIME) converts QPC ticks to ns with a
+     * 128-bit divide. Keep the wait in raw QPC ticks so the conversion is paid
+     * once per short timeout instead of once per iteration.
+     */
+    QueryPerformanceCounter(&counter);
+    ticks = DIV_ROUND_UP(timeout * clock_freq, NANOSECONDS_PER_SECOND);
+    deadline = counter.QuadPart + MAX(ticks, 1);
+    spin_ticks = DIV_ROUND_UP(XBOX_BUSYWAIT_SPIN_NS * clock_freq,
+                              NANOSECONDS_PER_SECOND);
+    spin_start = deadline - MAX(spin_ticks, 1);
+
+    if (counter.QuadPart < spin_start) {
+        xbox_wait_until_qpc(spin_start);
+    }
+
+    do {
+        QueryPerformanceCounter(&counter);
+    } while (counter.QuadPart < deadline);
+#else
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    int64_t end = now + timeout;
+
+    while (now < end) {
+        now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    }
+#endif
+}
+#endif
+
 
 /* qemu implementation of g_poll which uses a nanosecond timeout but is
  * otherwise identical to g_poll
@@ -347,13 +448,8 @@ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
     /* Timers are facilitated by this function. Busy-wait if the deadline is
      * near, to avoid missing deadlines due to costly sleeps.
      */
-    #define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
     if ((0 < timeout) && (timeout < XBOX_BUSYWAIT_THRESHOLD_NS)) {
-        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        int64_t end = now + timeout;
-        while (now < end) {
-            now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-        }
+        xbox_busy_wait_ns(timeout);
         timeout = 0;
     }
 #endif

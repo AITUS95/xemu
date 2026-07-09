@@ -127,8 +127,19 @@ static inline void uniform_copy(ShaderUniformLayout *layout, int idx,
 
     ShaderUniform *u = &layout->uniforms[idx - 1];
     const size_t element_size = value_size * u->dim_v;
+    const size_t total_size = value_size * count;
 
-    size_t bytes_remaining = value_size * count;
+    /*
+     * Most Vulkan uniforms are scalar/vector values or arrays that SPIR-V
+     * reflects as tightly packed elements. Copy those in one shot instead of
+     * issuing a memcpy per element.
+     */
+    if (u->dim_a <= 1 || u->stride == element_size) {
+        memcpy(uniform_ptr(layout, idx), values, total_size);
+        return;
+    }
+
+    size_t bytes_remaining = total_size;
     char *p_out = uniform_ptr(layout, idx);
     char *p_max = p_out + layout->total_size;
     char *p_in = (char *)values;

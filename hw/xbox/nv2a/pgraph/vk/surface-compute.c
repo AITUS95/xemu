@@ -134,6 +134,7 @@ static gchar *get_compute_shader_glsl(VkFormat host_fmt, bool pack,
         break;
     default:
         assert(!"Unsupported host fmt");
+        abort();
         break;
     }
     assert(template);

@@ -428,6 +428,7 @@ static MString* get_input_var(struct PixelShader *ps, struct InputInfo in, bool 
     default:
         fprintf(stderr, "Invalid PS_INPUTMAPPING mode: %d\n", in.mod);
         assert(!"Invalid PS_INPUTMAPPING mode");
+        abort();
         break;
     }
 
@@ -461,6 +462,7 @@ static MString* get_output(MString *reg, int mapping)
     default:
         fprintf(stderr, "Invalid PS_COMBINEROUTPUT mode: %d\n", mapping);
         assert(!"Invalid PS_COMBINEROUTPUT mode");
+        abort();
         break;
     }
     return res;
@@ -1001,10 +1003,19 @@ static MString* psh_convert(struct PixelShader *ps)
                              "}\n");
     }
 
+    /*
+     * Internal resolution scaling creates multiple host fragments for each
+     * NV2A pixel.  Depth interpolation must still be evaluated at the NV2A
+     * pixel center; otherwise those extra subpixel sample positions can
+     * change the ordering of nearly coplanar primitives.
+     */
+    mstring_append(
+        clip,
+        "vec2 unscaled_xy = floor(gl_FragCoord.xy / surfaceScale) + vec2(0.5);\n");
+
     if (ps->state->z_perspective) {
         mstring_append(
             clip,
-            "vec2 unscaled_xy = gl_FragCoord.xy / surfaceScale;\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"
@@ -1038,7 +1049,6 @@ static MString* psh_convert(struct PixelShader *ps)
     } else {
         mstring_append(
             clip,
-            "vec2 unscaled_xy = gl_FragCoord.xy / surfaceScale;\n"
             "precise float bc0 = area(unscaled_xy, vtxPos1.xy, vtxPos2.xy);\n"
             "precise float bc1 = area(unscaled_xy, vtxPos2.xy, vtxPos0.xy);\n"
             "precise float bc2 = area(unscaled_xy, vtxPos0.xy, vtxPos1.xy);\n"

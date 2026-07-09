@@ -70,6 +70,7 @@ typedef struct TextureBinding {
     unsigned int refcnt;
     int draw_time;
     uint64_t data_hash;
+    uint64_t dirty_generation;
     unsigned int scale;
     unsigned int min_filter;
     unsigned int mag_filter;
@@ -77,11 +78,26 @@ typedef struct TextureBinding {
     unsigned int addru;
     unsigned int addrv;
     unsigned int addrp;
+    uint32_t max_anisotropy;
     uint32_t border_color;
     bool border_color_set;
     GLenum gl_target;
     GLuint gl_texture;
+    unsigned int render_width;
+    unsigned int render_height;
+    GLint render_internal_format;
 } TextureBinding;
+
+typedef struct VertexAttribPointerState {
+    bool valid;
+    bool integer;
+    GLuint buffer;
+    GLint size;
+    GLenum type;
+    GLboolean normalized;
+    GLsizei stride;
+    uintptr_t pointer;
+} VertexAttribPointerState;
 
 typedef struct ShaderModuleCacheKey {
     GLenum kind;
@@ -112,6 +128,7 @@ typedef struct ShaderBinding {
     bool initialized;
 
     bool cached;
+    char *cache_key;
     void *program;
     size_t program_size;
     GLenum program_format;
@@ -182,6 +199,9 @@ typedef struct PGRAPHGLState {
     GLuint gl_memory_buffer;
     GLuint gl_vertex_array;
     GLuint gl_inline_buffer[NV2A_VERTEXSHADER_ATTRIBUTES];
+    uint16_t gl_enabled_vertex_attributes;
+    VertexAttribPointerState
+        gl_vertex_attrib_pointer[NV2A_VERTEXSHADER_ATTRIBUTES];
 
     QTAILQ_HEAD(, SurfaceBinding) surfaces;
     SurfaceBinding *color_binding, *zeta_binding;
@@ -193,10 +213,14 @@ typedef struct PGRAPHGLState {
     TextureBinding *texture_binding[NV2A_MAX_TEXTURES];
     Lru texture_cache;
     TextureLruNode *texture_cache_entries;
+    uint64_t texture_dirty_generation;
+    uint64_t *texture_dirty_pages;
+    size_t texture_dirty_page_count;
 
     Lru shader_cache;
     ShaderBinding *shader_cache_entries;
     ShaderBinding *shader_binding;
+    char *loaded_shader_cache_key;
     QemuMutex shader_cache_lock;
     QemuThread shader_disk_thread;
 
@@ -213,7 +237,7 @@ typedef struct PGRAPHGLState {
 
     struct s2t_rndr {
         GLuint fbo, vao, vbo, prog;
-        GLuint tex_loc, surface_size_loc;
+        GLuint tex_loc, surface_origin_loc;
     } s2t_rndr;
 
     struct disp_rndr {
@@ -238,7 +262,27 @@ typedef struct PGRAPHGLState {
     struct supported_extensions {
         GLboolean texture_filter_anisotropic;
     } supported_extensions;
+
+    VshUniformValues prev_vsh_values;
+    PshUniformValues prev_psh_values;
+    bool uniform_cache_valid;
 } PGRAPHGLState;
+
+static inline void pgraph_gl_set_vertex_attrib_array(PGRAPHGLState *r,
+                                                     unsigned int index,
+                                                     bool enabled)
+{
+    uint16_t mask = 1u << index;
+    if (enabled) {
+        if (!(r->gl_enabled_vertex_attributes & mask)) {
+            glEnableVertexAttribArray(index);
+            r->gl_enabled_vertex_attributes |= mask;
+        }
+    } else if (r->gl_enabled_vertex_attributes & mask) {
+        glDisableVertexAttribArray(index);
+        r->gl_enabled_vertex_attributes &= ~mask;
+    }
+}
 
 extern GloContext *g_nv2a_context_render;
 extern GloContext *g_nv2a_context_display;
@@ -246,8 +290,13 @@ extern GloContext *g_nv2a_context_display;
 unsigned int pgraph_gl_bind_inline_array(NV2AState *d);
 void pgraph_gl_bind_shaders(PGRAPHState *pg);
 void pgraph_gl_bind_textures(NV2AState *d);
+void pgraph_gl_set_vertex_attrib_pointer(PGRAPHGLState *r, unsigned int index,
+                                         GLuint buffer, bool integer,
+                                         GLint size, GLenum type,
+                                         GLboolean normalized,
+                                         GLsizei stride, uintptr_t pointer);
 void pgraph_gl_bind_vertex_attributes(NV2AState *d, unsigned int min_element, unsigned int max_element, bool inline_data, unsigned int inline_stride, unsigned int provoking_element);
-bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape);
+bool pgraph_gl_check_surface_to_texture_compatibility(const SurfaceBinding *surface, const TextureShape *shape, hwaddr texture_vram_offset, bool texture_uses_mipmaps, unsigned int *source_x, unsigned int *source_y);
 GLuint pgraph_gl_compile_shader(const char *vs_src, const char *fs_src);
 void pgraph_gl_download_dirty_surfaces(NV2AState *d);
 void pgraph_gl_clear_report_value(NV2AState *d);
@@ -277,7 +326,7 @@ void pgraph_gl_init_buffers(NV2AState *d);
 void pgraph_gl_finalize_buffers(PGRAPHState *pg);
 void pgraph_gl_process_pending_downloads(NV2AState *d);
 void pgraph_gl_reload_surface_scale_factor(PGRAPHState *pg);
-void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface, TextureBinding *texture, TextureShape *texture_shape, int texture_unit);
+void pgraph_gl_render_surface_to_texture(NV2AState *d, SurfaceBinding *surface, TextureBinding *texture, TextureShape *texture_shape, int texture_unit, unsigned int source_x, unsigned int source_y);
 void pgraph_gl_set_surface_dirty(PGRAPHState *pg, bool color, bool zeta);
 void pgraph_gl_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface);
 SurfaceBinding *pgraph_gl_surface_get(NV2AState *d, hwaddr addr);
@@ -285,7 +334,7 @@ SurfaceBinding *pgraph_gl_surface_get_within(NV2AState *d, hwaddr addr);
 void pgraph_gl_surface_invalidate(NV2AState *d, SurfaceBinding *e);
 void pgraph_gl_unbind_surface(NV2AState *d, bool color);
 void pgraph_gl_upload_surface_data(NV2AState *d, SurfaceBinding *surface, bool force);
-void pgraph_gl_shader_cache_to_disk(ShaderBinding *snode);
+void pgraph_gl_shader_cache_to_disk(PGRAPHState *pg, ShaderBinding *snode);
 bool pgraph_gl_shader_load_from_memory(ShaderBinding *snode);
 void pgraph_gl_shader_write_cache_reload_list(PGRAPHState *pg);
 void pgraph_gl_set_surface_scale_factor(NV2AState *d, unsigned int scale);

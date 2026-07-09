@@ -69,7 +69,62 @@ static inline int rcu_gp_ongoing(unsigned long *ctr)
 /* Written to only by each individual reader. Read by both the reader and the
  * writers.
  */
+#ifdef _WIN32
+/*
+ * MinGW's emulated TLS shows up prominently in Windows OpenGL profiles through
+ * get_ptr_rcu_reader() -> _emutls_get_address(). Use the native Win32 TLS API
+ * for this hot-path reader state instead.
+ */
+DWORD rcu_reader_tls_idx = TLS_OUT_OF_INDEXES;
+PVOID (WINAPI *rcu_tls_get_value)(DWORD);
+
+static struct rcu_reader_data *rcu_reader_new(void)
+{
+    struct rcu_reader_data *reader = g_new0(struct rcu_reader_data, 1);
+
+    notifier_list_init(&reader->force_rcu);
+    return reader;
+}
+
+static struct rcu_reader_data *get_or_create_ptr_rcu_reader(void)
+{
+    struct rcu_reader_data *reader;
+
+    reader = rcu_tls_get_reader();
+    if (!reader) {
+        reader = rcu_reader_new();
+        if (!TlsSetValue(rcu_reader_tls_idx, reader)) {
+            g_free(reader);
+            abort();
+        }
+    }
+
+    return reader;
+}
+
+struct rcu_reader_data get_rcu_reader(void)
+{
+    return *get_ptr_rcu_reader();
+}
+
+void set_rcu_reader(struct rcu_reader_data v)
+{
+    *get_ptr_rcu_reader() = v;
+}
+
+struct rcu_reader_data *get_ptr_rcu_reader_slow(void)
+{
+    struct rcu_reader_data *reader = rcu_tls_get_reader();
+
+    if (likely(reader)) {
+        return reader;
+    }
+
+    return get_or_create_ptr_rcu_reader();
+}
+#else
 QEMU_DEFINE_CO_TLS(struct rcu_reader_data, rcu_reader)
+#endif
 
 /* Protected by rcu_registry_lock.  */
 typedef QLIST_HEAD(, rcu_reader_data) ThreadList;
@@ -403,9 +458,18 @@ void rcu_register_thread(void)
 
 void rcu_unregister_thread(void)
 {
+    struct rcu_reader_data *reader = get_ptr_rcu_reader();
+
     qemu_mutex_lock(&rcu_registry_lock);
-    QLIST_REMOVE(get_ptr_rcu_reader(), node);
+    QLIST_REMOVE(reader, node);
     qemu_mutex_unlock(&rcu_registry_lock);
+
+#ifdef _WIN32
+    if (!TlsSetValue(rcu_reader_tls_idx, NULL)) {
+        abort();
+    }
+    g_free(reader);
+#endif
 }
 
 void rcu_add_force_rcu_notifier(Notifier *n)
@@ -431,6 +495,14 @@ static void rcu_init_complete(void)
     qemu_event_init(&rcu_gp_event, true);
 
     qemu_event_init(&rcu_call_ready_event, false);
+
+#ifdef _WIN32
+    rcu_reader_tls_idx = TlsAlloc();
+    assert(rcu_reader_tls_idx != TLS_OUT_OF_INDEXES);
+    rcu_tls_get_value =
+        (PVOID (WINAPI *)(DWORD))GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                "TlsGetValue2");
+#endif
 
     /* The caller is assumed to have BQL, so the call_rcu thread
      * must have been quiescent even after forking, just recreate it.

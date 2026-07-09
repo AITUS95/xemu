@@ -521,6 +521,16 @@ case "$cpu" in
     ;;
 esac
 
+MESON_CPU_CFLAGS="$CPU_CFLAGS"
+cc_basename=${cc##*/}
+cc_basename=${cc_basename##*\\}
+case "$host_os:$cc_basename" in
+  windows:cl|windows:cl.exe|windows:clang-cl|windows:clang-cl.exe|\
+  windows:msvc-cl|windows:msvc-cl.cmd|windows:msvc-cl.exe)
+    MESON_CPU_CFLAGS=
+    ;;
+esac
+
 if test -n "$host_arch" && {
     ! test -d "$source_path/linux-user/include/host/$host_arch" ||
     ! test -d "$source_path/common-user/host/$host_arch"; }; then
@@ -980,7 +990,7 @@ $mkvenv ensuregroup --dir "${source_path}/python/wheels" \
      ${source_path}/pythondeps.toml meson || exit 1
 
 # At this point, we expect Meson to be installed and available.
-# We expect mkvenv or pip to have created pyvenv/bin/meson for us.
+# We expect mkvenv or pip to have created a venv script directory for us.
 # We ignore PATH completely here: we want to use the venv's Meson
 # *exclusively*.
 
@@ -993,7 +1003,15 @@ get_pwd() {
     fi
 }
 
-meson="$(cd pyvenv/bin; get_pwd)/meson"
+if test -d pyvenv/bin; then
+    pyvenv_bin=pyvenv/bin
+elif test -d pyvenv/Scripts; then
+    pyvenv_bin=pyvenv/Scripts
+else
+    error_exit "Cannot find Python virtual environment scripts directory"
+fi
+
+meson="$(cd "$pyvenv_bin"; get_pwd)/meson"
 if [ -f "$meson$EXESUF" ]; then
   meson="$meson$EXESUF"
 fi
@@ -1151,6 +1169,9 @@ fi
 
 ##########################################
 # big/little endian test
+if test "$host_os" = "windows"; then
+  bigendian="no"
+else
 cat > $TMPC << EOF
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 # error LITTLE
@@ -1174,6 +1195,7 @@ EOF
     echo big/little test failed
     exit 1
   fi
+fi
 fi
 
 ##########################################
@@ -1913,9 +1935,9 @@ if test "$skip_meson" = no; then
 
   echo >> $cross
   echo "[binaries]" >> $cross
-  echo "c = [$(meson_quote $cc $CPU_CFLAGS)]" >> $cross
-  test -n "$cxx" && echo "cpp = [$(meson_quote $cxx $CPU_CFLAGS)]" >> $cross
-  test -n "$objcc" && echo "objc = [$(meson_quote $objcc $CPU_CFLAGS)]" >> $cross
+  echo "c = [$(meson_quote $cc $MESON_CPU_CFLAGS)]" >> $cross
+  test -n "$cxx" && echo "cpp = [$(meson_quote $cxx $MESON_CPU_CFLAGS)]" >> $cross
+  test -n "$objcc" && echo "objc = [$(meson_quote $objcc $MESON_CPU_CFLAGS)]" >> $cross
   if test "$rust" != disabled; then
     if test "$rust_host_triple" != "$rust_target_triple"; then
       echo "rust = [$(meson_quote $rustc --target "$rust_target_triple")]" >> $cross

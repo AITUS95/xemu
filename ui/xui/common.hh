@@ -18,6 +18,11 @@
 //
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <algorithm>
 #include <SDL3/SDL.h>
 #include <epoxy/gl.h>
 #include "ui/xemu-settings.h"
@@ -31,9 +36,21 @@
 #include <misc/cpp/imgui_stdlib.h>
 #include <stb_image.h>
 
+#include "qemu/osdep.h"
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 extern "C" {
 // Include necessary QEMU headers
-#include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "system/runstate.h"
 #include "hw/xbox/mcpx/apu/apu_debug.h"

@@ -298,7 +298,8 @@ typedef struct TCGTemp {
     TCGTempVal val_type:8;
     TCGType base_type:8;
     TCGType type:8;
-    TCGTempKind kind:3;
+    /* TEMP_CONST is 4; keep enough bits even for signed enum bitfields. */
+    TCGTempKind kind:4;
     unsigned int indirect_reg:1;
     unsigned int indirect_base:1;
     unsigned int mem_coherent:1;
@@ -334,7 +335,7 @@ typedef struct TCGTempSet {
 typedef uint32_t TCGLifeData;
 
 struct TCGOp {
-    TCGOpcode opc   : 8;
+    unsigned opc    : 8;
     unsigned nargs  : 8;
 
     /* Parameters for this opcode.  See below.  */
@@ -463,10 +464,22 @@ struct TCGContext {
     uint64_t *gen_insn_data;
 
     /* Exit to translator on overflow. */
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    jmp_buf jmp_trans;
+#else
     sigjmp_buf jmp_trans;
+#endif
 
     void *disas_ctx;
 };
+
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+#define tcg_trans_setjmp(env) setjmp(env)
+#define tcg_trans_longjmp(env, val) longjmp(env, val)
+#else
+#define tcg_trans_setjmp(env) sigsetjmp(env, 0)
+#define tcg_trans_longjmp(env, val) siglongjmp(env, val)
+#endif
 
 static inline bool temp_readonly(TCGTemp *ts)
 {

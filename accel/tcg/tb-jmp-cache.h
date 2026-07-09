@@ -26,7 +26,13 @@ typedef struct CPUJumpCache {
     struct rcu_head rcu;
     struct {
         TranslationBlock *tb;
+#if defined(XBOX) && !defined(CONFIG_USER_ONLY)
+        uint64_t addr_tag;
+#else
         vaddr pc;
+        uint64_t cs_base;
+#endif
+        uint64_t state_tag;
     } array[TB_JMP_CACHE_SIZE];
 } CPUJumpCache;
 
