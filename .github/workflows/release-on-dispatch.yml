@@ -2,6 +2,12 @@ name: Release (Dispatched)
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing or new semantic version tag to update
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -9,38 +15,52 @@ concurrency:
 
 jobs:
   tag:
-    name: Create release tag
+    name: Determine release version
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
-      tag: ${{ steps.semver.outputs.next }}
+      tag: ${{ steps.version.outputs.tag }}
+      pkg_version: ${{ steps.version.outputs.pkg_version }}
     steps:
-    - name: Clone tree
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
     - name: Determine new tag version
-      id: semver
+      id: version
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG_OVERRIDE: ${{ inputs.tag }}
       run: |
-        latest=$(
-          git ls-remote --tags --refs "https://github.com/${GITHUB_REPOSITORY}.git" 'v[0-9]*.[0-9]*.[0-9]*' |
-          awk '{print $2}' | sed 's#refs/tags/##' | sort -V | tail -n 1
-        )
-        [ -z "$latest" ] && latest="v0.0.0"
-        ver="${latest#v}"
-        IFS=. read -r major minor patch <<< "$ver"
-        next="v${major}.${minor}.$((patch+1))"
-        echo "next=$next" >> "$GITHUB_OUTPUT"
-    - name: Push new tag
-      run: |
-        git config user.name "nobody"
-        git config user.email "nobody@nowhere"
-        git tag -a "${{ steps.semver.outputs.next }}" -m "${{ steps.semver.outputs.next }}"
-        git push origin "${{ steps.semver.outputs.next }}"
+        if [ -n "$TAG_OVERRIDE" ]; then
+          next="$TAG_OVERRIDE"
+        else
+          latest=$(
+            {
+              git ls-remote --tags --refs "https://github.com/${GITHUB_REPOSITORY}.git" |
+                awk '{print $2}' | sed 's#refs/tags/##'
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' || true
+            } |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              sort -V |
+              tail -n 1
+          )
+          [ -z "$latest" ] && latest="v0.0.0"
+          ver="${latest#v}"
+          IFS=. read -r major minor patch <<< "$ver"
+          next="v${major}.${minor}.$((patch+1))"
+        fi
+
+        if ! [[ "$next" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Invalid semantic version tag: $next" >&2
+          exit 1
+        fi
+
+        echo "tag=$next" >> "$GITHUB_OUTPUT"
+        echo "pkg_version=${next#v}" >> "$GITHUB_OUTPUT"
 
   release:
     name: Release
     needs: tag
     uses: ./.github/workflows/release.yml
     with:
-      ref: ${{ needs.tag.outputs.tag }}
+      ref: ${{ github.sha }}
       tag: ${{ needs.tag.outputs.tag }}
+      pkg_version: ${{ needs.tag.outputs.pkg_version }}

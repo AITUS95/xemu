@@ -11,6 +11,10 @@ on:
         description: "Tag name for the release"
         required: true
         type: string
+      pkg_version:
+        description: "Explicit package version without a leading v"
+        required: false
+        type: string
       pre-release:
         description: "Create as published pre-release instead of draft release"
         required: false
@@ -23,6 +27,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ inputs.ref }}
+      pkg_version: ${{ inputs.pkg_version }}
 
   delete_prerelease:
     name: Delete pre-release
@@ -61,7 +66,7 @@ jobs:
       with:
         name: ${{ inputs.pre-release && 'Latest Development Build' || inputs.tag }}
         tag_name: ${{ inputs.tag }}
-        target_commitish: ${{ inputs.pre-release && inputs.ref || '' }}
+        target_commitish: ${{ inputs.ref }}
         body_path: CHANGELOG.md
         draft: ${{ !inputs.pre-release }}
         prerelease: ${{ inputs.pre-release }}

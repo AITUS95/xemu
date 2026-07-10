@@ -7,6 +7,10 @@ on:
         description: Git ref (commit, branch, or tag) to build
         required: true
         type: string
+      pkg_version:
+        description: Explicit package version without a leading v
+        required: false
+        type: string
     outputs:
       pkg_version:
         description: Build version
@@ -28,8 +32,12 @@ jobs:
       run: sudo apt-get install meson
     - name: Determine release version
       id: version
+      env:
+        PACKAGE_VERSION: ${{ inputs.pkg_version }}
       run: |
-        if TAG=$(git describe --tags --match 'v*' 2>/dev/null); then
+        if [ -n "$PACKAGE_VERSION" ]; then
+          echo "pkg_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+        elif TAG=$(git describe --tags --match 'v*' 2>/dev/null); then
           echo "pkg_version=${TAG#v}" >> $GITHUB_OUTPUT
         else
           SHORT_HASH=$(git rev-parse --short HEAD)
