@@ -58,10 +58,6 @@ static void voice_reset_filters(MCPXAPUState *d, uint16_t v)
     assert(v < MCPX_HW_MAX_VOICES);
     memset(&d->vp.filters[v].svf, 0, sizeof(d->vp.filters[v].svf));
     hrtf_filter_clear_history(&d->vp.filters[v].hrtf);
-    d->vp.filters[v].linear_phase = 0.0f;
-    d->vp.filters[v].linear_input_pos = 0;
-    d->vp.filters[v].linear_input_count = 0;
-    d->vp.filters[v].linear_valid = false;
     if (d->vp.filters[v].resampler) {
         src_reset(d->vp.filters[v].resampler);
     }
@@ -1130,29 +1126,38 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
     return sample_count;
 }
 
-static inline __attribute__((always_inline))
-bool voice_linear_pull_sample(MCPXAPUState *d, uint16_t v,
-                              MCPXAPUVoiceFilter *filter, float sample[2])
+static long voice_resample_callback(void *cb_data, float **data)
 {
-    float (*input_buf)[2] = (float (*)[2])filter->resample_buf;
+    MCPXAPUVoiceFilter *filter = cb_data;
+    uint16_t v = filter->voice;
+    assert(v < MCPX_HW_MAX_VOICES);
+    MCPXAPUState *d = container_of(filter, MCPXAPUState, vp.filters[v]);
 
-    if (filter->linear_input_pos >= filter->linear_input_count) {
-        int count = voice_get_samples(
-            d, v, input_buf, NUM_SAMPLES_PER_FRAME);
-        if (count <= 0) {
-            filter->linear_input_pos = 0;
-            filter->linear_input_count = 0;
-            return false;
+    int sample_count = 0;
+    while (sample_count < NUM_SAMPLES_PER_FRAME) {
+        int active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
+                                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
+        if (!active) {
+            break;
         }
-
-        filter->linear_input_pos = 0;
-        filter->linear_input_count = count;
+        int count = voice_get_samples(
+            d, v, (float(*)[2]) & filter->resample_buf[2 * sample_count],
+            NUM_SAMPLES_PER_FRAME - sample_count);
+        if (count < 0) {
+            break;
+        }
+        sample_count += count;
     }
 
-    sample[0] = input_buf[filter->linear_input_pos][0];
-    sample[1] = input_buf[filter->linear_input_pos][1];
-    filter->linear_input_pos++;
-    return true;
+    if (sample_count < NUM_SAMPLES_PER_FRAME) {
+        /* Starvation causes SRC hang on repeated calls. Provide silence. */
+        memset(&filter->resample_buf[2*sample_count], 0,
+            2*(NUM_SAMPLES_PER_FRAME-sample_count)*sizeof(float));
+        sample_count = NUM_SAMPLES_PER_FRAME;
+    }
+
+    *data = filter->resample_buf;
+    return sample_count;
 }
 
 static int voice_resample(MCPXAPUState *d, uint16_t v, float samples[][2],
@@ -1160,56 +1165,38 @@ static int voice_resample(MCPXAPUState *d, uint16_t v, float samples[][2],
 {
     assert(v < MCPX_HW_MAX_VOICES);
     MCPXAPUVoiceFilter *filter = &d->vp.filters[v];
-    float step;
-    int sample_count = 0;
 
-    if (rate <= 0.0f) {
-        return -1;
+    if (filter->resampler == NULL) {
+        filter->voice = v;
+        int err;
+
+        /* Note: Using a sinc based resampler for quality. Unsure about
+         * hardware's actual interpolation method; it could just be linear, in
+         * which case using this resampler is overkill, but quality is good
+         * so use it for now.
+         */
+        // FIXME: Don't do 2ch resampling if this is a mono voice
+        filter->resampler = src_callback_new(&voice_resample_callback,
+                                           SRC_SINC_FASTEST, 2, &err, filter);
+        if (filter->resampler == NULL) {
+            fprintf(stderr, "src error: %s\n", src_strerror(err));
+            assert(0);
+        }
     }
 
-    step = 1.0f / rate;
+    int count = src_callback_read(filter->resampler, rate, requested_num,
+                                  (float *)samples);
+    if (count == -1) {
+        DPRINTF("resample error\n");
+    }
+    if (count != requested_num) {
+        DPRINTF("resample returned fewer than expected: %d\n", count);
 
-    if (!filter->linear_valid) {
-        if (!voice_linear_pull_sample(d, v, filter, filter->linear_prev)) {
+        if (count == 0)
             return -1;
-        }
-        if (!voice_linear_pull_sample(d, v, filter, filter->linear_next)) {
-            filter->linear_next[0] = filter->linear_prev[0];
-            filter->linear_next[1] = filter->linear_prev[1];
-        }
-        filter->linear_phase = 0.0f;
-        filter->linear_valid = true;
     }
 
-    while (sample_count < requested_num) {
-        float t = filter->linear_phase;
-
-        samples[sample_count][0] =
-            filter->linear_prev[0] +
-            (filter->linear_next[0] - filter->linear_prev[0]) * t;
-        samples[sample_count][1] =
-            filter->linear_prev[1] +
-            (filter->linear_next[1] - filter->linear_prev[1]) * t;
-        sample_count++;
-
-        filter->linear_phase += step;
-        while (filter->linear_phase >= 1.0f) {
-            filter->linear_prev[0] = filter->linear_next[0];
-            filter->linear_prev[1] = filter->linear_next[1];
-
-            if (!voice_linear_pull_sample(d, v, filter, filter->linear_next)) {
-                filter->linear_input_pos = 0;
-                filter->linear_input_count = 0;
-                filter->linear_phase = 0.0f;
-                filter->linear_valid = false;
-                return sample_count;
-            }
-
-            filter->linear_phase -= 1.0f;
-        }
-    }
-
-    return sample_count;
+    return count;
 }
 
 static int peek_ahead_multipass_bin(MCPXAPUState *d, uint16_t v,
