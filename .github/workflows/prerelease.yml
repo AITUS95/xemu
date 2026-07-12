@@ -16,7 +16,7 @@ concurrency:
 jobs:
   release:
     name: Pre-release
-    if: github.repository_owner == 'AITUS95'
+    if: github.repository_owner == 'AITUS95' && github.event.head_commit.message != 'ci-rebuild-v0.0.1'
     uses: ./.github/workflows/release.yml
     with:
       ref: ${{ github.sha }}
