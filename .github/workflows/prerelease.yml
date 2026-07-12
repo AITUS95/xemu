@@ -12,7 +12,7 @@ concurrency:
 jobs:
   release:
     name: Pre-release
-    if: github.repository_owner == 'xemu-project'
+    if: github.repository_owner == 'AITUS95'
     uses: ./.github/workflows/release.yml
     with:
       ref: ${{ github.sha }}
