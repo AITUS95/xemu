@@ -102,9 +102,7 @@ jobs:
           -name '*-pdb.zip' -o \
           -name '*.tgz' \
         \) -delete
-        if [ "${{ inputs.pre-release }}" = "true" ]; then
-          rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
-        fi
+        rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
     - name: Add transitionary package aliases
       if: ${{ !inputs.pre-release }}
       run: |
