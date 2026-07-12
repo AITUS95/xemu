@@ -67,6 +67,15 @@ jobs:
       with:
         path: dist
         merge-multiple: true
+    - name: Keep release builds only
+      run: |
+        find dist -type f \( \
+          -name '*-dbg-*' -o \
+          -name '*-dbg.*' -o \
+          -name '*-debug.tgz' -o \
+          -name '*-pdb.zip' -o \
+          -name '*.tgz' \
+        \) -delete
     - name: Add transitionary package aliases
       if: ${{ !inputs.pre-release }}
       run: |
@@ -84,6 +93,5 @@ jobs:
         prerelease: ${{ inputs.pre-release }}
         files: |
           dist/xemu*.tar.zst
-          dist/xemu*.tgz
           dist/xemu*.zip
           dist/xemu*.AppImage
