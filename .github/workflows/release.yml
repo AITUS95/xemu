@@ -116,9 +116,12 @@ jobs:
           base="${file##*/}"
           case "$base" in
             xemu-win-*) continue ;;
-            *-windows-x86_64-msvc-release.zip) asset_type="windows-x86_64-msvc-release" ;;
-            *-windows-x86_64-msvc-profile.zip) asset_type="windows-x86_64-msvc-profile" ;;
-            *-windows-x86_64-msvc-debug.zip) asset_type="windows-x86_64-msvc-debug" ;;
+            xemu-msvc-release.zip) asset_type="msvc-release" ;;
+            xemu-msvc-profile.zip) asset_type="msvc-profile" ;;
+            xemu-msvc-debug.zip) asset_type="msvc-debug" ;;
+            *-windows-x86_64-msvc-release.zip) asset_type="msvc-release" ;;
+            *-windows-x86_64-msvc-profile.zip) asset_type="msvc-profile" ;;
+            *-windows-x86_64-msvc-debug.zip) asset_type="msvc-debug" ;;
             *-windows-x86_64.zip) asset_type="windows-x86_64-release" ;;
             *-windows-arm64.zip) asset_type="windows-arm64-release" ;;
             *-macos-universal-unsigned.zip) asset_type="macos-universal-release" ;;

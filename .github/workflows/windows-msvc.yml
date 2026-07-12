@@ -291,55 +291,26 @@ jobs:
           path: xemu-msvc-logs
           if-no-files-found: warn
 
+      - name: Package MSVC build artifact
+        if: always()
+        shell: pwsh
+        run: |
+          $source = "msvc-artifacts\${{ matrix.build_config }}"
+          $archive = "xemu-msvc-${{ matrix.build_config }}.zip"
+          if (Test-Path -LiteralPath $source) {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+            Compress-Archive -Path (Join-Path $source "*") -DestinationPath $archive
+          } else {
+            Write-Warning "MSVC artifact directory not found: $source"
+          }
+
       - name: Upload MSVC build artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
-          name: ${{ matrix.build_config }}
-          path: msvc-artifacts/${{ matrix.build_config }}
+          name: xemu-msvc-${{ matrix.build_config }}.zip
+          path: xemu-msvc-${{ matrix.build_config }}.zip
           if-no-files-found: ignore
-
-  package_release:
-    name: Package MSVC release assets
-    needs: build
-    if: ${{ inputs.pkg_version != '' && needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download debug artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-        with:
-          name: debug
-          path: msvc/debug
-
-      - name: Download profile artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-        with:
-          name: profile
-          path: msvc/profile
-
-      - name: Download release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-        with:
-          name: release
-          path: msvc/release
-
-      - name: Package MSVC builds
-        env:
-          VERSION: ${{ inputs.pkg_version }}
-        run: |
-          set -eu
-          mkdir -p dist
-          for config in debug profile release; do
-            archive="xemu-${VERSION}-windows-x86_64-msvc-${config}.zip"
-            (cd "msvc/${config}" && zip -qr "../../dist/${archive}" .)
-          done
-
-      - name: Upload MSVC release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
-        with:
-          name: xemu-windows-msvc-release
-          path: dist/*.zip
-          compression-level: 0
 
   logs:
     name: Merge MSVC logs
