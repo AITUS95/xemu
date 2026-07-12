@@ -1,4 +1,4 @@
-# xemu
+# xemu MSVC
 
 This fork carries the Windows/MSVC build integration from the `MSVC` branch.
 Its build documentation combines the guidance previously maintained on
