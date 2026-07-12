@@ -12,6 +12,7 @@ Requires the GitHub CLI (gh) to be installed and authenticated.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from urllib.request import urlopen
 from urllib.error import URLError
 
 
-REPO_NAME = "xemu-project/xemu"
+REPO_NAME = os.environ.get("GITHUB_REPOSITORY", "xemu-project/xemu")
 XEMU_TITLE_URL_BASE = "https://xemu.app/titles/"
 XDB_RAW_URL_BASE = "https://raw.githubusercontent.com/xemu-project/xdb/main/titles"
 
