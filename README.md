@@ -550,4 +550,4 @@ macOS 12.7.5 for `x86_64`. It produces the application bundle at
 
 Vulkan is enabled and required by the Windows and Linux recipes above. The
 current source tree does not provide a macOS Vulkan configuration, so macOS
-builds use the OpenGL backend.
+builds use the OpenGL backend. 
