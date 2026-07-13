@@ -79,8 +79,14 @@ jobs:
     - name: Filter release assets
       run: |
         find dist -type f -name '*.tgz' -delete
-        if [ "${{ inputs.pre-release }}" != "true" ]; then
+        find dist -type f \( \
+          -name '*-macos-arm64-unsigned.zip' -o \
+          -name '*-macos-x86_64-unsigned.zip' \
+        \) -delete
+        if [ "\${{ inputs.pre-release }}" != "true" ]; then
           rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
+          cp "dist/xemu-\${{ needs.build.outputs.pkg_version }}-macos-universal-unsigned.zip" \
+             "dist/xemu-\${{ needs.build.outputs.pkg_version }}-macos-universal.zip"
         fi
     - name: Add transitionary package aliases
       if: ${{ !inputs.pre-release }}
@@ -100,6 +106,18 @@ jobs:
           fi
         done
 
+    - name: Delete existing stable release
+      if: \${{ !inputs.pre-release && inputs.publish }}
+      env:
+        GH_TOKEN: \${{ github.token }}
+        GH_REPO: \${{ github.repository }}
+      run: |
+        set -euo pipefail
+        release_id="\$(gh api "repos/\$GH_REPO/releases/tags/\${{ inputs.tag }}" --jq '.id' 2>/dev/null || true)"
+        if [ -n "\$release_id" ]; then
+          gh api --method DELETE "repos/\$GH_REPO/releases/\$release_id"
+        fi
+
     - name: Create release
       uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
@@ -112,8 +130,10 @@ jobs:
         make_latest: false
         files: |
           dist/xemu*.tar.zst
-          dist/xemu*.zip
+          dist/xemu*-win*.zip
+          dist/xemu*-macos-universal*.zip
           dist/xemu*.AppImage
+          dist/xemu*-msvc-*.zip
 
     - name: Keep stable release below development build
       if: ${{ inputs.pre-release }}
