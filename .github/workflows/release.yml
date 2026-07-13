@@ -83,10 +83,10 @@ jobs:
           -name '*-macos-arm64-unsigned.zip' -o \
           -name '*-macos-x86_64-unsigned.zip' \
         \) -delete
-        if [ "\${{ inputs.pre-release }}" != "true" ]; then
+        if [ "${{ inputs.pre-release }}" != "true" ]; then
           rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
-          cp "dist/xemu-\${{ needs.build.outputs.pkg_version }}-macos-universal-unsigned.zip" \
-             "dist/xemu-\${{ needs.build.outputs.pkg_version }}-macos-universal.zip"
+          cp "dist/xemu-${{ needs.build.outputs.pkg_version }}-macos-universal-unsigned.zip" \
+             "dist/xemu-${{ needs.build.outputs.pkg_version }}-macos-universal.zip"
         fi
     - name: Add transitionary package aliases
       if: ${{ !inputs.pre-release }}
@@ -107,15 +107,15 @@ jobs:
         done
 
     - name: Delete existing stable release
-      if: \${{ !inputs.pre-release && inputs.publish }}
+      if: ${{ !inputs.pre-release && inputs.publish }}
       env:
-        GH_TOKEN: \${{ github.token }}
-        GH_REPO: \${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        release_id="\$(gh api "repos/\$GH_REPO/releases/tags/\${{ inputs.tag }}" --jq '.id' 2>/dev/null || true)"
-        if [ -n "\$release_id" ]; then
-          gh api --method DELETE "repos/\$GH_REPO/releases/\$release_id"
+        release_id="$(gh api "repos/$GH_REPO/releases/tags/${{ inputs.tag }}" --jq '.id' 2>/dev/null || true)"
+        if [ -n "$release_id" ]; then
+          gh api --method DELETE "repos/$GH_REPO/releases/$release_id"
         fi
 
     - name: Create release
