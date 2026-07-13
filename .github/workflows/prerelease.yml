@@ -16,7 +16,7 @@ concurrency:
 jobs:
   release:
     name: Pre-release
-    if: github.repository_owner == 'AITUS95' && github.event.head_commit.message != 'ci-fix-release-order' && github.event.head_commit.message != 'ci-fix-release-order-cleanup'
+    if: github.repository_owner == 'AITUS95' && github.event.head_commit.message != 'ci-fix-release-order-cleanup'
     uses: ./.github/workflows/release.yml
     with:
       ref: ${{ github.sha }}
