@@ -20,6 +20,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: "Publish a stable release immediately"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: write
@@ -71,76 +76,30 @@ jobs:
       with:
         path: dist
         merge-multiple: true
-    - name: Keep release builds only
+    - name: Filter release assets
       run: |
-        find dist -type f \( \
-          -name '*-dbg-*' -o \
-          -name '*-dbg.*' -o \
-          -name '*-debug.tgz' -o \
-          -name '*-pdb.zip' -o \
-          -name '*.tgz' \
-        \) -delete
-        rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
+        find dist -type f -name '*.tgz' -delete
+        if [ "${{ inputs.pre-release }}" != "true" ]; then
+          rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
+        fi
     - name: Add transitionary package aliases
       if: ${{ !inputs.pre-release }}
       run: |
         pushd dist
         cp xemu-${{ needs.build.outputs.pkg_version }}-windows-x86_64.zip xemu-win-x86_64-release.zip
         cp xemu-${{ needs.build.outputs.pkg_version }}-windows-arm64.zip xemu-win-aarch64-release.zip
-    - name: Normalize release asset names
+    - name: Normalize MSVC asset names
       env:
-        RELEASE_REF: ${{ inputs.ref }}
+        PKG_VERSION: ${{ needs.build.outputs.pkg_version }}
       run: |
         set -euo pipefail
-
-        commit="$(git rev-parse --short=10 "$RELEASE_REF")"
-        if [[ "${{ inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          release_version="${{ inputs.tag }}"
-          release_version="${release_version#v}"
-        else
-          release_version="$(git describe --tags --match 'v*' --abbrev=0 "$RELEASE_REF" 2>/dev/null || true)"
-          release_version="${release_version#v}"
-        fi
-        if [ -z "$release_version" ]; then
-          release_version="0.0.0"
-        fi
-
-        for file in dist/*.tar.zst; do
-          [ -f "$file" ] || continue
-          mv "$file" "dist/xemu-source-${release_version}-${commit}.tar.zst"
+        for config in release profile debug; do
+          source="dist/xemu-msvc-${config}.zip"
+          if [ -f "$source" ]; then
+            mv "$source" "dist/xemu-${PKG_VERSION}-msvc-${config}.zip"
+          fi
         done
 
-        for file in dist/*.AppImage; do
-          [ -f "$file" ] || continue
-          base="${file##*/}"
-          case "$base" in
-            *aarch64*) asset_type="linux-aarch64-release" ;;
-            *x86_64*) asset_type="linux-x86_64-release" ;;
-            *) continue ;;
-          esac
-          mv "$file" "dist/xemu-${asset_type}-${release_version}-${commit}.AppImage"
-        done
-
-        for file in dist/*.zip; do
-          [ -f "$file" ] || continue
-          base="${file##*/}"
-          case "$base" in
-            xemu-win-*) continue ;;
-            xemu-msvc-release.zip) asset_type="msvc-release" ;;
-            xemu-msvc-profile.zip) asset_type="msvc-profile" ;;
-            xemu-msvc-debug.zip) asset_type="msvc-debug" ;;
-            *-windows-x86_64-msvc-release.zip) asset_type="msvc-release" ;;
-            *-windows-x86_64-msvc-profile.zip) asset_type="msvc-profile" ;;
-            *-windows-x86_64-msvc-debug.zip) asset_type="msvc-debug" ;;
-            *-windows-x86_64.zip) asset_type="windows-x86_64-release" ;;
-            *-windows-arm64.zip) asset_type="windows-arm64-release" ;;
-            *-macos-universal-unsigned.zip) asset_type="macos-universal-release" ;;
-            *-macos-arm64-unsigned.zip) asset_type="macos-arm64-release" ;;
-            *-macos-x86_64-unsigned.zip) asset_type="macos-x86_64-release" ;;
-            *) continue ;;
-          esac
-          mv "$file" "dist/xemu-${asset_type}-${release_version}-${commit}.zip"
-        done
     - name: Create release
       uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
@@ -148,7 +107,7 @@ jobs:
         tag_name: ${{ inputs.tag }}
         target_commitish: ${{ inputs.ref }}
         body_path: CHANGELOG.md
-        draft: ${{ !inputs.pre-release }}
+        draft: ${{ !inputs.pre-release && !inputs.publish }}
         prerelease: ${{ inputs.pre-release }}
         make_latest: false
         files: |
