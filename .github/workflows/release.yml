@@ -20,11 +20,6 @@ on:
         required: false
         type: boolean
         default: false
-      publish:
-        description: "Publish a stable release immediately"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   actions: write
@@ -106,18 +101,6 @@ jobs:
           fi
         done
 
-    - name: Delete existing stable release
-      if: ${{ !inputs.pre-release && inputs.publish }}
-      env:
-        GH_TOKEN: ${{ github.token }}
-        GH_REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
-        release_id="$(gh api "repos/$GH_REPO/releases/tags/${{ inputs.tag }}" 2>/dev/null | jq -r '.id // empty' || true)"
-        if [ -n "$release_id" ]; then
-          gh api --method DELETE "repos/$GH_REPO/releases/$release_id"
-        fi
-
     - name: Create release
       uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
@@ -125,7 +108,7 @@ jobs:
         tag_name: ${{ inputs.tag }}
         target_commitish: ${{ inputs.ref }}
         body_path: CHANGELOG.md
-        draft: ${{ !inputs.pre-release && !inputs.publish }}
+        draft: ${{ !inputs.pre-release }}
         prerelease: ${{ inputs.pre-release }}
         make_latest: false
         files: |
