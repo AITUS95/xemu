@@ -150,7 +150,22 @@ jobs:
         body_path: CHANGELOG.md
         draft: ${{ !inputs.pre-release }}
         prerelease: ${{ inputs.pre-release }}
+        make_latest: false
         files: |
           dist/xemu*.tar.zst
           dist/xemu*.zip
           dist/xemu*.AppImage
+
+    - name: Keep stable release below development build
+      if: ${{ inputs.pre-release }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        stable_tag="$(gh api "repos/$GH_REPO/releases?per_page=100" \
+          --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' | head -n 1)"
+        if [ -n "$stable_tag" ]; then
+          gh api --method PATCH "repos/$GH_REPO/releases/tags/$stable_tag" \
+            -f make_latest=false >/dev/null
+        fi
