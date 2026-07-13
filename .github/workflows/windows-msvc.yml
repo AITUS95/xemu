@@ -188,6 +188,18 @@ jobs:
           fetch-depth: 1
           fetch-tags: true
           ref: ${{ inputs.ref || github.ref }}
+      - name: Set XEMU version
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ inputs.pkg_version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PKG_VERSION)) {
+            throw "MSVC package version is required"
+          }
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE "XEMU_VERSION"),
+            $env:PKG_VERSION
+          )
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache

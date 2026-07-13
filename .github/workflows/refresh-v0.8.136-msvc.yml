@@ -1,0 +1,40 @@
+name: Refresh v0.8.136 MSVC
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  msvc:
+    name: Build MSVC
+    if: github.event.head_commit.message == 'ci-fix-msvc-version'
+    uses: ./.github/workflows/windows-msvc.yml
+    with:
+      ref: ${{ github.sha }}
+      pkg_version: 0.8.136
+
+  replace:
+    name: Replace stable MSVC asset
+    needs: msvc
+    if: github.event.head_commit.message == 'ci-fix-msvc-version' && needs.msvc.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download MSVC artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Replace stable release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mv dist/xemu-msvc-release.zip dist/xemu-0.8.136-msvc-release.zip
+          gh release upload v0.8.136 dist/xemu-0.8.136-msvc-release.zip --clobber --repo "$GH_REPO"

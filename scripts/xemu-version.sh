@@ -16,8 +16,11 @@ XEMU_VERSION=$( \
   if test -e .git; then \
     { git describe --tags --match 'v*' 2>/dev/null || true; } | cut -c 2- | tr -d '\n'; \
   elif test -e XEMU_VERSION; then \
-    cat XEMU_VERSION; \
+    cat XEMU_VERSION | tr -d '\n'; \
   fi)
+if [ "${XEMU_VERSION}" = "" ] && [ -e "${dir}/XEMU_VERSION" ]; then
+  XEMU_VERSION=$(tr -d '\n' < "${dir}/XEMU_VERSION")
+fi
 
 if [ "${XEMU_VERSION}" = "" ]; then
   XEMU_VERSION="0.0.0"
