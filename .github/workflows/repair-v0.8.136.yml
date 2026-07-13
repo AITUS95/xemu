@@ -50,7 +50,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          release_id="$(gh api "repos/$GH_REPO/releases/tags/v0.8.136" --jq '.id' 2>/dev/null || true)"
+          release_id="$(gh api "repos/$GH_REPO/releases/tags/v0.8.136" 2>/dev/null | jq -r '.id // empty' || true)"
           if [ -n "$release_id" ]; then
             gh api --method DELETE "repos/$GH_REPO/releases/$release_id"
           fi
