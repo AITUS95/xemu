@@ -163,9 +163,9 @@ jobs:
         GH_REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        stable_tag="$(gh api "repos/$GH_REPO/releases?per_page=100" \
-          --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' | head -n 1)"
-        if [ -n "$stable_tag" ]; then
-          gh api --method PATCH "repos/$GH_REPO/releases/tags/$stable_tag" \
+        stable_id="$(gh api "repos/$GH_REPO/releases?per_page=100" \
+          --jq '.[] | select(.draft == false and .prerelease == false) | .id' | head -n 1)"
+        if [ -n "$stable_id" ]; then
+          gh api --method PATCH "repos/$GH_REPO/releases/$stable_id" \
             -f make_latest=false >/dev/null
         fi
