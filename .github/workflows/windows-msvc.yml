@@ -21,7 +21,6 @@ on:
   push:
     branches:
       - MSVC
-      - agent/revert-apu-linear-resampler
     paths:
       - ".github/workflows/**"
       - "scripts/ci/**"
@@ -195,7 +194,7 @@ jobs:
           PKG_VERSION: ${{ inputs.pkg_version }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PKG_VERSION)) {
-            $env:PKG_VERSION = "0.0.0-revert-apu-test"
+            throw "MSVC package version is required"
           }
           [System.IO.File]::WriteAllText(
             (Join-Path $env:GITHUB_WORKSPACE "XEMU_VERSION"),
