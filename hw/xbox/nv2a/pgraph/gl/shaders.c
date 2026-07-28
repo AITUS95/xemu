@@ -252,6 +252,7 @@ static void generate_shaders(PGRAPHGLState *r, ShaderBinding *binding)
 }
 
 static const char *shader_gl_vendor = NULL;
+static const char *shader_gl_version = NULL;
 
 static void shader_create_cache_folder(void)
 {
@@ -467,6 +468,11 @@ static bool shader_write_cached_binary_file(const char *cache_key, uint64_t hash
         gl_vendor_len = (uint64_t)(strlen(shader_gl_vendor) + 1);
     }
 
+    static uint64_t gl_version_len;
+    if (gl_version_len == 0) {
+        gl_version_len = (uint64_t)(strlen(shader_gl_version) + 1);
+    }
+
     static uint64_t build_id_len = 0;
     if (build_id_len == 0) {
         build_id_len = (uint64_t)(strlen(xemu_commit) + 1);
@@ -498,6 +504,8 @@ static bool shader_write_cached_binary_file(const char *cache_key, uint64_t hash
     WRITE_OR_ERR(xemu_commit, build_id_len);
     WRITE_OR_ERR(&gl_vendor_len, sizeof(gl_vendor_len));
     WRITE_OR_ERR(shader_gl_vendor, gl_vendor_len);
+    WRITE_OR_ERR(&gl_version_len, sizeof(gl_version_len));
+    WRITE_OR_ERR(shader_gl_version, gl_version_len);
     WRITE_OR_ERR(&program_format, sizeof(program_format));
     WRITE_OR_ERR(state, sizeof(*state));
     WRITE_OR_ERR(&program_size, sizeof(program_size));
@@ -517,10 +525,12 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
     PGRAPHGLState *r = pg->gl_renderer_state;
     char *cached_build_id = NULL;
     char *cached_gl_vendor = NULL;
+    char *cached_gl_version = NULL;
     void *program_buffer = NULL;
 
     uint64_t cached_build_id_len;
     uint64_t gl_vendor_len;
+    uint64_t gl_version_len;
     GLenum program_binary_format;
     ShaderState state;
     size_t shader_size;
@@ -558,6 +568,15 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
         goto error;
     }
 
+    READ_OR_ERR(&gl_version_len, sizeof(gl_version_len));
+
+    cached_gl_version = g_malloc(gl_version_len);
+    READ_OR_ERR(cached_gl_version, gl_version_len);
+    if (strcmp(cached_gl_version, shader_gl_version) != 0) {
+        fclose(shader_file);
+        goto error;
+    }
+
     READ_OR_ERR(&program_binary_format, sizeof(program_binary_format));
     READ_OR_ERR(&state, sizeof(state));
     READ_OR_ERR(&shader_size, sizeof(shader_size));
@@ -570,6 +589,7 @@ static bool shader_load_from_disk_path(PGRAPHState *pg, uint64_t hash,
     fclose(shader_file);
     g_free(cached_build_id);
     g_free(cached_gl_vendor);
+    g_free(cached_gl_version);
 
     if (migrate_cache_key &&
         !shader_write_cached_binary_file(migrate_cache_key, hash,
@@ -603,6 +623,7 @@ error:
     g_free(program_buffer);
     g_free(cached_build_id);
     g_free(cached_gl_vendor);
+    g_free(cached_gl_version);
     return false;
 }
 
@@ -708,6 +729,9 @@ void pgraph_gl_init_shaders(PGRAPHState *pg)
 
     if (!shader_gl_vendor) {
         shader_gl_vendor = (const char *) glGetString(GL_VENDOR);
+    }
+    if (!shader_gl_version) {
+        shader_gl_version = (const char *) glGetString(GL_VERSION);
     }
 
     shader_create_cache_folder();
