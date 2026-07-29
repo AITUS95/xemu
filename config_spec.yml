@@ -309,6 +309,10 @@ display:
     default: true
 
 audio:
+  resampler:
+    type: enum
+    values: [linear, sinc]
+    default: linear
   vp:
     num_workers:
       type: integer

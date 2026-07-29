@@ -844,6 +844,12 @@ void MainMenuAudioView::Draw()
     Slider("Output volume limit", &g_config.audio.volume_limit, buf);
 
     SectionTitle("Quality");
+    ChevronCombo("Audio resampler", &g_config.audio.resampler,
+                 "Linear (Recommended)\0"
+                 "Sinc\0",
+                 "Sinc improves resampling quality but can significantly "
+                 "increase CPU load, especially with many active voices "
+                 "(requires restart)");
     Toggle("Real-time DSP processing", &g_config.audio.use_dsp,
            "Enable improved audio accuracy (experimental)");
     Toggle("DSP JIT engine", &g_config.audio.use_dsp_jit,
