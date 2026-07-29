@@ -1155,9 +1155,8 @@ bool voice_linear_pull_sample(MCPXAPUState *d, uint16_t v,
     return true;
 }
 
-static int voice_resample_linear(MCPXAPUState *d, uint16_t v,
-                                 float samples[][2], int requested_num,
-                                 float rate)
+static int voice_resample(MCPXAPUState *d, uint16_t v, float samples[][2],
+                          int requested_num, float rate)
 {
     assert(v < MCPX_HW_MAX_VOICES);
     MCPXAPUVoiceFilter *filter = &d->vp.filters[v];
@@ -1211,96 +1210,6 @@ static int voice_resample_linear(MCPXAPUState *d, uint16_t v,
     }
 
     return sample_count;
-}
-
-static long voice_sinc_resample_callback(void *cb_data, float **data)
-{
-    MCPXAPUVoiceFilter *filter = cb_data;
-    uint16_t v = filter->voice;
-    assert(v < MCPX_HW_MAX_VOICES);
-    MCPXAPUState *d = container_of(filter, MCPXAPUState, vp.filters[v]);
-
-    int sample_count = 0;
-    while (sample_count < NUM_SAMPLES_PER_FRAME) {
-        int active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
-        if (!active) {
-            break;
-        }
-        int count = voice_get_samples(
-            d, v, (float(*)[2]) & filter->resample_buf[2 * sample_count],
-            NUM_SAMPLES_PER_FRAME - sample_count);
-        if (count < 0) {
-            break;
-        }
-        sample_count += count;
-    }
-
-    if (sample_count < NUM_SAMPLES_PER_FRAME) {
-        /* Starvation causes SRC hang on repeated calls. Provide silence. */
-        memset(&filter->resample_buf[2*sample_count], 0,
-            2*(NUM_SAMPLES_PER_FRAME-sample_count)*sizeof(float));
-        sample_count = NUM_SAMPLES_PER_FRAME;
-    }
-
-    *data = filter->resample_buf;
-    return sample_count;
-}
-
-static int voice_resample_sinc(MCPXAPUState *d, uint16_t v,
-                               float samples[][2], int requested_num,
-                               float rate)
-{
-    assert(v < MCPX_HW_MAX_VOICES);
-    MCPXAPUVoiceFilter *filter = &d->vp.filters[v];
-
-    if (filter->resampler == NULL) {
-        filter->voice = v;
-        int err;
-
-        /* Note: Using a sinc based resampler for quality. Unsure about
-         * hardware's actual interpolation method; it could just be linear, in
-         * which case using this resampler is overkill, but quality is good
-         * so use it for now.
-         */
-        // FIXME: Don't do 2ch resampling if this is a mono voice
-        filter->resampler = src_callback_new(&voice_sinc_resample_callback,
-                                           SRC_SINC_FASTEST, 2, &err, filter);
-        if (filter->resampler == NULL) {
-            fprintf(stderr, "src error: %s\n", src_strerror(err));
-            assert(0);
-        }
-    }
-
-    int count = src_callback_read(filter->resampler, rate, requested_num,
-                                  (float *)samples);
-    if (count == -1) {
-        DPRINTF("resample error\n");
-    }
-    if (count != requested_num) {
-        DPRINTF("resample returned fewer than expected: %d\n", count);
-
-        if (count == 0)
-            return -1;
-    }
-
-    return count;
-}
-
-static int voice_resample(MCPXAPUState *d, uint16_t v,
-                          float samples[][2], int requested_num, float rate)
-{
-    if (rate <= 0.0f) {
-        return -1;
-    }
-
-    switch (d->vp.resampler_mode) {
-    case CONFIG_AUDIO_RESAMPLER_SINC:
-        return voice_resample_sinc(d, v, samples, requested_num, rate);
-    case CONFIG_AUDIO_RESAMPLER_LINEAR:
-    default:
-        return voice_resample_linear(d, v, samples, requested_num, rate);
-    }
 }
 
 static int peek_ahead_multipass_bin(MCPXAPUState *d, uint16_t v,
@@ -1989,19 +1898,12 @@ void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_P
 
 void mcpx_apu_vp_init(MCPXAPUState *d)
 {
-    d->vp.resampler_mode = g_config.audio.resampler;
     voice_work_init(d);
 }
 
 void mcpx_apu_vp_finalize(MCPXAPUState *d)
 {
     voice_work_finalize(d);
-    for (int v = 0; v < ARRAY_SIZE(d->vp.filters); v++) {
-        if (d->vp.filters[v].resampler) {
-            src_delete(d->vp.filters[v].resampler);
-            d->vp.filters[v].resampler = NULL;
-        }
-    }
 }
 
 void mcpx_apu_vp_reset(MCPXAPUState *d)
